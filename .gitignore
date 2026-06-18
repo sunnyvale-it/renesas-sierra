@@ -1,1 +1,8 @@
 **/*.iso
+**/*.qcow2
+**/*.img
+__pycache__
+vm_key
+vm_key.pub
+ovmf_vars.fd
+serial.log

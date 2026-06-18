@@ -57,46 +57,97 @@ graph TD
 
 ---
 
-## 3. Host Prerequisites
+## 3. Host Prerequisites & UEFI Boot Requirements
+
+To successfully boot a pre-installed Ubuntu Cloud Image (`disk.qcow2`), the host must have UEFI (OVMF) firmware files installed. The launcher orchestrators will automatically detect and configure them.
 
 ### macOS Hosts
 1. Install **Homebrew** from [brew.sh](https://brew.sh).
-2. Install QEMU:
+2. Install QEMU (this package automatically includes the required EDK2 UEFI code/vars firmware files at `/opt/homebrew/share/qemu/`):
    ```bash
    brew install qemu
    ```
 3. Python 3.x is pre-installed (used to run `mock_modem.py`).
 
+### Linux Hosts
+1. Install QEMU and the OVMF/EDK2 package:
+   - **Debian/Ubuntu**: `sudo apt install qemu-system-x86 ovmf`
+   - **Arch/Manjaro**: `sudo pacman -S qemu-desktop edk2-ovmf`
+   - **Fedora/RHEL**: `sudo dnf install qemu-kvm edk2-ovmf`
+
 ### Windows Hosts
-1. Download and run the QEMU installer for Windows from the [QEMU official website](https://www.qemu.org/download/#windows). Add it to your System `PATH`.
+1. Download and run the QEMU installer for Windows from the [QEMU official website](https://www.qemu.org/download/#windows) (which includes the UEFI code/vars files in the installation's `share` folder). Add QEMU to your System `PATH`.
 2. Python 3.x is required to run the AT command mock daemon.
 
 ---
 
 ## 4. Execution Guide
 
-To run the full software-emulated environment:
+To run the full software-emulated environment, choose one of the following two options to boot the VM:
 
-### Step 1: Start the VM (with Ubuntu Server ISO)
-First, boot the VM. Specify your Ubuntu ISO using the `--iso` option:
+### Option A: Using a Pre-Installed Ubuntu 22.04 LTS Image (Fastest)
 
-**On macOS / Linux**:
-```bash
-./launch.sh --iso ubuntu-24.04-live-server-amd64.iso
-```
+If you want to skip the OS installation phase entirely, you can download an official pre-installed Ubuntu Cloud Image and boot it directly.
 
-**On Windows (PowerShell)**:
-```powershell
-.\launch.ps1 -IsoPath ubuntu-24.04-live-server-amd64.iso
-```
+1. **Download the pre-installed disk image**:
+   ```bash
+   curl -L -o disk.qcow2 https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+   ```
+2. **Boot the VM directly** (this automatically starts the VM using the pre-installed disk image):
+   - **On macOS / Linux**:
+     ```bash
+     ./launch.sh
+     ```
+   - **On Windows (PowerShell)**:
+     ```powershell
+     .\launch.ps1
+     ```
 
-### Step 2: Run the Modem Mock Daemon (on Host)
-In a separate terminal window on your host machine, start the Python script to emulate the Sierra Wireless EM7590 AT command processor:
+> [!NOTE]
+> **Automatic Cloud-Init & SSH Key Integration (macOS)**:
+> When launching the VM directly (without `--iso`) on macOS, the launcher script dynamically:
+> 1. Generates an SSH key pair (`vm_key` / `vm_key.pub`) in the repository root folder.
+> 2. Clears conflicting cached entries for port 2222 in your host's `~/.ssh/known_hosts` file.
+> 3. Creates a `cloud-init.iso` drive that configures:
+>    - **Username**: `ubuntu`
+>    - **Password**: `password123`
+>    - **SSH Public Key**: Injects `vm_key.pub` for passwordless authorization.
+>
+> You can connect via SSH from your host terminal using the generated private key directly:
+> ```bash
+> ssh -i vm_key -p 2222 ubuntu@127.0.0.1
+> ```
+
+---
+
+### Option B: Installing from an ISO Media
+
+If you want to perform an interactive installation from scratch using the official Ubuntu installation media:
+
+1. **Download the installation ISO**:
+   ```bash
+   curl -L -o ubuntu-22.04-live-server-amd64.iso https://releases.ubuntu.com/22.04/ubuntu-22.04.5-live-server-amd64.iso
+   ```
+2. **Boot the VM and mount the ISO**:
+   - **On macOS / Linux**:
+     ```bash
+     ./launch.sh --iso ubuntu-22.04-live-server-amd64.iso
+     ```
+   - **On Windows (PowerShell)**:
+     ```powershell
+     .\launch.ps1 -IsoPath ubuntu-22.04-live-server-amd64.iso
+     ```
+
+---
+
+### Next Step: Run the Modem Mock Daemon (on Host)
+
+Once the VM is launched, open a separate terminal window on your host machine and start the Python script to emulate the Sierra Wireless EM7590 AT command processor:
 
 ```bash
 python3 mock_modem.py
 ```
-*The daemon will connect to the QEMU guest serial interface and start listening for AT commands.*
+*The daemon will connect to QEMU's virtual serial port and start listening for AT commands.*
 
 ---
 

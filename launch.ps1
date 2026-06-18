@@ -96,6 +96,38 @@ if (-not (Test-Path $DiskPath)) {
     Write-Host "[+] Using existing disk image at: $DiskPath" -ForegroundColor Gray
 }
 
+# 2.5 Cloud-Init Configuration (For Ubuntu Cloud Images)
+if (-not $IsoPath) {
+    # Generate SSH keys if they don't exist or generate fresh ones
+    $VmKeyPath = Join-Path $ScriptDir "vm_key"
+    $VmKeyPubPath = Join-Path $ScriptDir "vm_key.pub"
+    
+    Write-Host "[+] Generating fresh SSH key pair (vm_key) for VM login..." -ForegroundColor Green
+    if (Test-Path $VmKeyPath) { Remove-Item $VmKeyPath -Force }
+    if (Test-Path $VmKeyPubPath) { Remove-Item $VmKeyPubPath -Force }
+    
+    # Check if ssh-keygen.exe is available
+    $SshKeygen = Get-Command "ssh-keygen" -ErrorAction SilentlyContinue
+    if ($SshKeygen) {
+        if (-not $DryRun) {
+            Start-Process ssh-keygen -ArgumentList "-t ed25519 -N `"`" -f `"$VmKeyPath`" -q" -NoNewWindow -Wait
+            # Clean up known_hosts port 2222 entries
+            Start-Process ssh-keygen -ArgumentList "-R `"[127.0.0.1]:2222`"" -NoNewWindow -Wait -ErrorAction SilentlyContinue
+        }
+    } else {
+        Write-Host "[!] Warning: ssh-keygen was not found. SSH key pair generation skipped." -ForegroundColor Yellow
+    }
+
+    $CloudInitIso = Join-Path $ScriptDir "cloud-init.iso"
+    if (-not (Test-Path $CloudInitIso)) {
+        Write-Host "[!] Warning: cloud-init.iso is missing." -ForegroundColor Yellow
+        Write-Host "    Without cloud-init.iso, the Ubuntu Cloud Image will not have the SSH key injected." -ForegroundColor Yellow
+        Write-Host "    Please run the macOS launcher first or provide an ISO installation media using -IsoPath." -ForegroundColor Yellow
+    } else {
+        Write-Host "[+] Using existing cloud-init.iso to configure Ubuntu Cloud Image login." -ForegroundColor Gray
+    }
+}
+
 # 3. CPU Acceleration Verification
 # WHPX (Windows Hypervisor Platform) is the native hypervisor API for Windows
 $AccelFlags = "-accel whpx -cpu host"
@@ -112,7 +144,7 @@ if ($MockMode -eq "true") {
     
     $UsbFlags += @("-chardev", "socket,id=modem_serial,host=127.0.0.1,port=$MockSerialPort,server=on,wait=off")
     $UsbFlags += @("-device", "usb-serial,bus=$UsbId.0,chardev=modem_serial")
-    $UsbFlags += @("-netdev", "user,id=net_modem")
+    $UsbFlags += @("-netdev", "user,id=net_modem,net=10.0.3.0/24")
     $UsbFlags += @("-device", "usb-net,bus=$UsbId.0,netdev=net_modem")
 } else {
     # Parse Vid/Pid to format suitable for device querying (e.g. 1199 and c081)
@@ -167,6 +199,48 @@ if ($MockMode -eq "true") {
     }
 }
 
+# 4.5 UEFI/OVMF Firmware Detection
+$UefiCode = ""
+$UefiVarsTemplate = ""
+
+$QemuDir = Split-Path $QemuPath
+$PossibleUefiPairs = @(
+    @{ Code = (Join-Path $QemuDir "share\edk2-x86_64-code.fd"); Vars = (Join-Path $QemuDir "share\edk2-i386-vars.fd") },
+    @{ Code = (Join-Path $env:ProgramFiles "qemu\share\edk2-x86_64-code.fd"); Vars = (Join-Path $env:ProgramFiles "qemu\share\edk2-i386-vars.fd") },
+    @{ Code = (Join-Path ${env:ProgramFiles(x86)} "qemu\share\edk2-x86_64-code.fd"); Vars = (Join-Path ${env:ProgramFiles(x86)} "qemu\share\edk2-i386-vars.fd") }
+)
+
+foreach ($pair in $PossibleUefiPairs) {
+    if (Test-Path $pair.Code -and Test-Path $pair.Vars) {
+        $UefiCode = $pair.Code
+        $UefiVarsTemplate = $pair.Vars
+        break
+    }
+}
+
+$UefiFlags = @()
+if ($UefiCode -and $UefiVarsTemplate) {
+    Write-Host "[+] UEFI firmware detected:" -ForegroundColor Green
+    Write-Host "    Code: $UefiCode" -ForegroundColor Gray
+    Write-Host "    Vars template: $UefiVarsTemplate" -ForegroundColor Gray
+    
+    $LocalVars = Join-Path $ScriptDir "ovmf_vars.fd"
+    if (-not (Test-Path $LocalVars)) {
+        Write-Host "[+] Copying UEFI NVRAM variables template to $LocalVars..." -ForegroundColor Yellow
+        if (-not $DryRun) {
+            Copy-Item $UefiVarsTemplate $LocalVars
+        }
+    }
+    
+    $UefiFlags = @(
+        "-drive", "if=pflash,format=raw,readonly=on,file=`"$UefiCode`"",
+        "-drive", "if=pflash,format=raw,file=`"$LocalVars`""
+    )
+} else {
+    Write-Host "[!] Warning: UEFI/OVMF firmware files not found." -ForegroundColor Yellow
+    Write-Host "    If you are booting a GPT-partitioned Cloud Image (e.g. disk.qcow2), it may fail to boot." -ForegroundColor Yellow
+}
+
 # 5. Build QEMU Arguments
 $QemuArgs = @(
     "-name", "`"$VmName`"",
@@ -179,9 +253,15 @@ $QemuArgs = @(
     "-display", "default,show-cursor=on,zoom-to-fit=on",
     "-device", "virtio-net-pci,netdev=net0",
     "-netdev", "user,id=net0,hostfwd=tcp::2222-:22",
-    "-drive", "file=`"$DiskPath`",format=qcow2,if=virtio",
+    "-drive", "file=`"$DiskPath`",format=qcow2,if=none,id=bootdisk",
+    "-device", "virtio-blk-pci,drive=bootdisk,bootindex=1",
     "-device", "$UsbType,id=$UsbId"
 )
+
+if ($UefiFlags) {
+    $QemuArgs += $UefiFlags
+}
+
 
 if ($UsbFlags) {
     $QemuArgs += $UsbFlags
@@ -197,6 +277,16 @@ if ($IsoPath) {
     $QemuArgs += "file=`"$IsoPath`",media=cdrom,readonly=on"
     $QemuArgs += "-boot"
     $QemuArgs += "d"
+}
+
+# Attach cloud-init metadata ISO if booting from disk image and cloud-init.iso exists
+$CloudInitIso = Join-Path $ScriptDir "cloud-init.iso"
+if ((Test-Path $CloudInitIso) -and -not $IsoPath) {
+    Write-Host "[+] Attaching cloud-init.iso configuration drive." -ForegroundColor Green
+    $QemuArgs += @(
+        "-drive", "file=`"$CloudInitIso`",if=none,id=cdrom_cloudinit,media=cdrom,readonly=on",
+        "-device", "ide-cd,bus=ide.1,drive=cdrom_cloudinit"
+    )
 }
 
 # 6. Execute VM or dry run

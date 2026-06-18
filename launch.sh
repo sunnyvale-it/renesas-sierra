@@ -83,6 +83,65 @@ else
     echo "[+] Using existing disk image at: $DISK_PATH"
 fi
 
+# 2.5 Cloud-Init Configuration (For Ubuntu Cloud Images)
+if [[ -z "$ISO_PATH" ]]; then
+    # Automatically generate an SSH key pair for passwordless SSH access
+    echo "[+] Generating fresh SSH key pair (vm_key) for VM login..."
+    rm -f "${SCRIPT_DIR}/vm_key" "${SCRIPT_DIR}/vm_key.pub"
+    ssh-keygen -t ed25519 -N "" -f "${SCRIPT_DIR}/vm_key" -q
+    SSH_PUB_KEY=$(cat "${SCRIPT_DIR}/vm_key.pub")
+    
+    # Automatically prune conflicting host key entries on port 2222
+    ssh-keygen -R "[127.0.0.1]:2222" &>/dev/null || true
+
+    if command -v hdiutil &> /dev/null; then
+        echo "[+] Generating cloud-init.iso to configure Ubuntu Cloud Image login..."
+        rm -f "${SCRIPT_DIR}/cloud-init.iso"
+        TEMP_DIR=$(mktemp -d)
+        
+        cat <<EOF > "${TEMP_DIR}/user-data"
+#cloud-config
+ssh_pwauth: True
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${SSH_PUB_KEY}
+chpasswd:
+  list: |
+    ubuntu:password123
+  expire: False
+EOF
+
+        echo "local-hostname: renesas-sierra-vm" > "${TEMP_DIR}/meta-data"
+        echo "instance-id: i-renesas-sierra-vm-$(date +%s)" >> "${TEMP_DIR}/meta-data"
+
+        cat <<EOF > "${TEMP_DIR}/network-config"
+version: 2
+ethernets:
+  enp0s2:
+    dhcp4: true
+    optional: true
+  all-en:
+    match:
+      name: "en*"
+    dhcp4: true
+    optional: true
+  all-usb:
+    match:
+      name: "usb*"
+    dhcp4: true
+    optional: true
+EOF
+
+        hdiutil makehybrid -o "${SCRIPT_DIR}/cloud-init.iso" -hfs -joliet -iso -default-volume-name cidata "${TEMP_DIR}" > /dev/null 2>&1 || true
+        rm -rf "${TEMP_DIR}"
+        echo "[+] Created cloud-init.iso (Username: 'ubuntu', Password: 'password123')."
+    fi
+fi
+
+
 # 3. CPU Acceleration Detection
 HOST_ARCH="$(uname -m)"
 ACCEL_FLAGS=""
@@ -108,7 +167,7 @@ if [[ "${MOCK_MODE:-false}" == "true" ]]; then
     
     USB_FLAGS="-chardev socket,id=modem_serial,host=127.0.0.1,port=${MOCK_SERIAL_PORT},server=on,wait=off"
     USB_FLAGS+=" -device usb-serial,bus=${USB_CONTROLLER_ID}.0,chardev=modem_serial"
-    USB_FLAGS+=" -netdev user,id=net_modem -device usb-net,bus=${USB_CONTROLLER_ID}.0,netdev=net_modem"
+    USB_FLAGS+=" -netdev user,id=net_modem,net=10.0.3.0/24 -device usb-net,bus=${USB_CONTROLLER_ID}.0,netdev=net_modem"
 else
     # On macOS, check if the USB device is present using system_profiler
     echo "[+] Checking for physical Sierra Wireless EM7590 (VID: $MODEM_VENDOR_ID, PID: $MODEM_PRODUCT_ID)..."
@@ -150,6 +209,56 @@ else
     fi
 fi
 
+# 4.5 UEFI/OVMF Firmware Detection
+UEFI_CODE=""
+UEFI_VARS_TEMPLATE=""
+
+# List of possible UEFI code/vars paths
+# Array of colon-separated pairs: CODE_PATH:VARS_PATH
+POSSIBLE_UEFI_PAIRS=(
+    "/opt/homebrew/share/qemu/edk2-x86_64-code.fd:/opt/homebrew/share/qemu/edk2-i386-vars.fd"
+    "/usr/local/share/qemu/edk2-x86_64-code.fd:/usr/local/share/qemu/edk2-i386-vars.fd"
+    "/usr/share/qemu/edk2-x86_64-code.fd:/usr/share/qemu/edk2-i386-vars.fd"
+    "/usr/share/OVMF/OVMF_CODE.fd:/usr/share/OVMF/OVMF_VARS.fd"
+    "/usr/share/ovmf/OVMF_CODE.fd:/usr/share/ovmf/OVMF_VARS.fd"
+    "/usr/share/ovmf/x64/OVMF_CODE.fd:/usr/share/ovmf/x64/OVMF_VARS.fd"
+)
+
+for pair in "${POSSIBLE_UEFI_PAIRS[@]}"; do
+    code_path="${pair%%:*}"
+    vars_path="${pair#*:}"
+    if [[ -f "$code_path" && -f "$vars_path" ]]; then
+        UEFI_CODE="$code_path"
+        UEFI_VARS_TEMPLATE="$vars_path"
+        break
+    fi
+done
+
+UEFI_FLAGS=()
+if [[ -n "$UEFI_CODE" && -n "$UEFI_VARS_TEMPLATE" ]]; then
+    echo "[+] UEFI firmware detected:"
+    echo "    Code: $UEFI_CODE"
+    echo "    Vars template: $UEFI_VARS_TEMPLATE"
+    
+    LOCAL_VARS="${SCRIPT_DIR}/ovmf_vars.fd"
+    if [[ ! -f "$LOCAL_VARS" ]]; then
+        echo "[+] Copying UEFI NVRAM variables template to $LOCAL_VARS..."
+        if [[ "$DRY_RUN" = false ]]; then
+            cp "$UEFI_VARS_TEMPLATE" "$LOCAL_VARS"
+            chmod 644 "$LOCAL_VARS"
+        fi
+    fi
+    
+    UEFI_FLAGS=(
+        -drive "if=pflash,format=raw,readonly=on,file=$UEFI_CODE"
+        -drive "if=pflash,format=raw,file=$LOCAL_VARS"
+    )
+else
+    echo "[!] Warning: UEFI/OVMF firmware files not found on host."
+    echo "    If you are booting a GPT-partitioned Cloud Image (e.g. disk.qcow2), it may fail to boot."
+    echo "    To fix this, install 'qemu' (macOS) or 'ovmf'/'edk2-ovmf' (Linux)."
+fi
+
 # 5. Build QEMU Execution Command
 QEMU_CMD=(
     qemu-system-x86_64
@@ -163,13 +272,20 @@ QEMU_CMD=(
 # shellcheck disable=SC2206
 QEMU_CMD+=($ACCEL_FLAGS)
 
+# Append UEFI flags if detected
+if [[ ${#UEFI_FLAGS[@]} -gt 0 ]]; then
+    QEMU_CMD+=("${UEFI_FLAGS[@]}")
+fi
+
 # Standard peripherals and graphics (virtio / cocoa for macOS)
 QEMU_CMD+=(
     -vga virtio
     -display cocoa,show-cursor=on,zoom-to-fit=on
     -device virtio-net-pci,netdev=net0
     -netdev user,id=net0,hostfwd=tcp::2222-:22
-    -drive "file=${DISK_PATH},format=qcow2,if=virtio"
+    -drive "file=${DISK_PATH},format=qcow2,if=none,id=bootdisk"
+    -device "virtio-blk-pci,drive=bootdisk,bootindex=1"
+    -serial telnet:127.0.0.1:4445,server=on,wait=off
 )
 
 # Append Renesas uPD720202 compatible XHCI controller
@@ -191,8 +307,18 @@ if [[ -n "$ISO_PATH" ]]; then
     fi
     echo "[+] Attaching ISO installation media: ${ISO_PATH}"
     QEMU_CMD+=(
-        -drive "file=${ISO_PATH},media=cdrom,readonly=on"
+        -drive "file=${ISO_PATH},if=none,id=cdrom_iso,media=cdrom,readonly=on"
+        -device "ide-cd,bus=ide.0,drive=cdrom_iso"
         -boot d
+    )
+fi
+
+# Attach cloud-init metadata ISO if booting from disk image and cloud-init.iso exists
+if [[ -f "${SCRIPT_DIR}/cloud-init.iso" && -z "$ISO_PATH" ]]; then
+    echo "[+] Attaching cloud-init.iso configuration drive."
+    QEMU_CMD+=(
+        -drive "file=${SCRIPT_DIR}/cloud-init.iso,if=none,id=cdrom_cloudinit,media=cdrom,readonly=on"
+        -device "ide-cd,bus=ide.1,drive=cdrom_cloudinit"
     )
 fi
 
