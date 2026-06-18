@@ -97,47 +97,57 @@ else
     ACCEL_FLAGS="-accel tcg,thread=multi -cpu max"
 fi
 
-# 4. Hardware USB Passthrough Verification (Sierra Wireless EM7590)
+# 4. Hardware USB Configuration (Sierra Wireless EM7590 / Mock Emulation)
 USB_FLAGS=""
 PASSTHROUGH_ACTIVE=false
 
-# On macOS, check if the USB device is present using system_profiler
-echo "[+] Checking for physical Sierra Wireless EM7590 (VID: $MODEM_VENDOR_ID, PID: $MODEM_PRODUCT_ID)..."
-if command -v system_profiler &> /dev/null; then
-    # Convert config IDs (e.g. 0x1199) to lower-case standard formats for grepping
-    V_ID=$(echo "$MODEM_VENDOR_ID" | tr '[:upper:]' '[:lower:]')
-    P_ID=$(echo "$MODEM_PRODUCT_ID" | tr '[:upper:]' '[:lower:]')
+if [[ "${MOCK_MODE:-false}" == "true" ]]; then
+    echo "[+] Running in 100% Software Emulation / Mock Mode (MOCK_MODE=true)."
+    echo "[+] Attaching virtual USB-serial port linked to TCP port ${MOCK_SERIAL_PORT} (AT commands)..."
+    echo "[+] Attaching virtual USB-net adapter linked to user network (mobile broadband)..."
     
-    # system_profiler reports USB devices. We check for vendor and product matches.
-    USB_PROFILE=$(system_profiler SPUSBDataType 2>/dev/null || true)
-    
-    if echo "$USB_PROFILE" | grep -qi "Vendor ID: ${V_ID}" && echo "$USB_PROFILE" | grep -qi "Product ID: ${P_ID}"; then
-        echo "[+] Detected Sierra Wireless EM7590 on the host USB bus!"
-        PASSTHROUGH_ACTIVE=true
-    else
-        # Fallback check removing leading 0x
-        V_SHORT=${V_ID#0x}
-        P_SHORT=${P_ID#0x}
-        if echo "$USB_PROFILE" | grep -qi "${V_SHORT}" && echo "$USB_PROFILE" | grep -qi "${P_SHORT}"; then
+    USB_FLAGS="-chardev socket,id=modem_serial,host=127.0.0.1,port=${MOCK_SERIAL_PORT},server=on,wait=off"
+    USB_FLAGS+=" -device usb-serial,bus=${USB_CONTROLLER_ID}.0,chardev=modem_serial"
+    USB_FLAGS+=" -netdev user,id=net_modem -device usb-net,bus=${USB_CONTROLLER_ID}.0,netdev=net_modem"
+else
+    # On macOS, check if the USB device is present using system_profiler
+    echo "[+] Checking for physical Sierra Wireless EM7590 (VID: $MODEM_VENDOR_ID, PID: $MODEM_PRODUCT_ID)..."
+    if command -v system_profiler &> /dev/null; then
+        # Convert config IDs (e.g. 0x1199) to lower-case standard formats for grepping
+        V_ID=$(echo "$MODEM_VENDOR_ID" | tr '[:upper:]' '[:lower:]')
+        P_ID=$(echo "$MODEM_PRODUCT_ID" | tr '[:upper:]' '[:lower:]')
+        
+        # system_profiler reports USB devices. We check for vendor and product matches.
+        USB_PROFILE=$(system_profiler SPUSBDataType 2>/dev/null || true)
+        
+        if echo "$USB_PROFILE" | grep -qi "Vendor ID: ${V_ID}" && echo "$USB_PROFILE" | grep -qi "Product ID: ${P_ID}"; then
             echo "[+] Detected Sierra Wireless EM7590 on the host USB bus!"
             PASSTHROUGH_ACTIVE=true
+        else
+            # Fallback check removing leading 0x
+            V_SHORT=${V_ID#0x}
+            P_SHORT=${P_ID#0x}
+            if echo "$USB_PROFILE" | grep -qi "${V_SHORT}" && echo "$USB_PROFILE" | grep -qi "${P_SHORT}"; then
+                echo "[+] Detected Sierra Wireless EM7590 on the host USB bus!"
+                PASSTHROUGH_ACTIVE=true
+            fi
         fi
     fi
-fi
 
-if [[ "$PASSTHROUGH_ACTIVE" = true ]]; then
-    # Since we are doing USB passthrough, macOS requires root access to detach host claim
-    if [[ "$EUID" -ne 0 && "$DRY_RUN" = false ]]; then
-        echo "[!] Privilege Elevation Required: USB Passthrough on macOS requires 'sudo' privileges."
-        echo "    Re-running script under sudo..."
-        exec sudo "$0" "$@"
+    if [[ "$PASSTHROUGH_ACTIVE" = true ]]; then
+        # Since we are doing USB passthrough, macOS requires root access to detach host claim
+        if [[ "$EUID" -ne 0 && "$DRY_RUN" = false ]]; then
+            echo "[!] Privilege Elevation Required: USB Passthrough on macOS requires 'sudo' privileges."
+            echo "    Re-running script under sudo..."
+            exec sudo "$0" "$@"
+        fi
+        USB_FLAGS="-device usb-host,bus=${USB_CONTROLLER_ID}.0,vendorid=${MODEM_VENDOR_ID},productid=${MODEM_PRODUCT_ID}"
+        echo "[+] Configuration: Direct USB passthrough enabled."
+    else
+        echo "[!] Warning: Sierra Wireless EM7590 was not detected on the host USB bus."
+        echo "    The VM will start WITHOUT direct hardware passthrough."
+        echo "    (You can connect it later, or configure emulation interfaces.)"
     fi
-    USB_FLAGS="-device usb-host,bus=${USB_CONTROLLER_ID}.0,vendorid=${MODEM_VENDOR_ID},productid=${MODEM_PRODUCT_ID}"
-    echo "[+] Configuration: Direct USB passthrough enabled."
-else
-    echo "[!] Warning: Sierra Wireless EM7590 was not detected on the host USB bus."
-    echo "    The VM will start WITHOUT direct hardware passthrough."
-    echo "    (You can connect it later, or configure emulation interfaces.)"
 fi
 
 # 5. Build QEMU Execution Command

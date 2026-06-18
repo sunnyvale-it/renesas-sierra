@@ -1,176 +1,175 @@
-# QEMU IaC Replication: x64, Renesas uPD720202 & Sierra Wireless EM7590
+# QEMU IaC Replication: Software-Emulated x64, Renesas XHCI & Sierra Wireless Modem
 
-This repository provides a self-contained, Infrastructure-as-Code (IaC) procedure to replicate an **x64 guest system** containing a **Renesas uPD720202 USB 3.0 Controller** and a **Sierra Wireless EM7590 LTE Modem** passed through from the host.
+This repository provides a self-contained, Infrastructure-as-Code (IaC) procedure to replicate an **x64 guest system** containing a **Renesas USB 3.0 Controller** and a **Sierra Wireless EM7590 LTE Modem** mapped in software. 
 
-This configuration is designed to function seamlessly on both **macOS** (Intel/Apple Silicon) and **Windows** hosts.
+This configuration is designed to function seamlessly on both **macOS** (Intel/Apple Silicon) and **Windows** hosts, requiring **zero physical hardware** (fully emulated).
 
 ---
 
-## 1. System Architecture
+## 1. System Architecture (Software Emulation Mode)
 
-The following diagram illustrates how the host hardware and QEMU hypervisor map physical and emulated components into the guest system:
+The following diagram illustrates how the QEMU hypervisor creates emulated virtual components:
 
 ```mermaid
 graph TD
     subgraph "Host System (macOS or Windows)"
         HostOS["Host OS Kernel"]
-        PhysModem["Sierra Wireless EM7590<br/>USB Device: 1199:c081"]
+        MockDaemon["mock_modem.py<br/>AT Command Responder"]
     end
 
     subgraph "QEMU x86_64 Virtual Machine"
-        GuestKernel["Guest OS Kernel<br/>Linux or Windows"]
+        GuestKernel["Guest OS Kernel<br/>(e.g., Ubuntu Server 24.04)"]
         
         subgraph "Emulated PCIe Topology"
             VM_CPU["x64 Virtual CPU"]
-            XHCI["Renesas/NEC compatible XHCI<br/>nec-usb-xhci Controller"]
+            XHCI["Renesas/NEC compatible XHCI<br/>(nec-usb-xhci Controller)"]
         end
         
         subgraph "Emulated USB Topology"
-            VM_Modem["Replicated EM7590 Modem<br/>Attached to xhci0.0"]
+            VM_Serial["Virtual USB Serial Adapter<br/>(Exposes /dev/ttyUSB0)"]
+            VM_Net["Virtual USB Ethernet Adapter<br/>(Exposes usb0 / wwan0)"]
         end
     end
 
-    PhysModem -.->|"USB Host Passthrough<br/>via LibUSB/UsbDk"| VM_Modem
+    MockDaemon <==>|"Host Socket Connection<br/>(TCP Port: 4444)"| VM_Serial
     XHCI ===>|"PCIe Bus Interface"| VM_CPU
-    VM_Modem ===>|"USB 3.0 Protocol"| XHCI
+    VM_Serial ===>|"Attached to XHCI USB Port 1"| XHCI
+    VM_Net ===>|"Attached to XHCI USB Port 2"| XHCI
 ```
 
 ### Component Mapping Details
 
-| Physical Target Device | QEMU Emulation / Passthrough Strategy | PCI / USB Identifiers | Notes |
+| Emulated Component | QEMU / Software Simulation Strategy | Identifiers / Drivers | Notes |
 | :--- | :--- | :--- | :--- |
-| **x64 CPU Architecture** | Native x86_64 CPU emulation or hardware acceleration. | `-machine q35` | Uses `hvf` on Intel macOS, `whpx` on Windows, and `tcg` software translation on Apple Silicon. |
-| **Renesas uPD720202 Controller** | Emulated NEC/Renesas XHCI USB 3.0 controller (`nec-usb-xhci`). | Vendor ID: `0x1033`<br/>Device ID: `0x0194` | QEMU emulates the µPD720200 controller, which shares the exact same kernel driver stack (`xhci_hcd`) as the uPD720202. |
-| **Sierra Wireless EM7590 LTE Modem** | Direct USB Host Passthrough mapped to the `nec-usb-xhci` controller. | Vendor ID: `0x1199`<br/>Product ID: `0xc081` | Dynamically captured from host and attached to the VM. |
+| **x64 CPU** | Software TCG emulation (ARM64 hosts) or HVF/WHPX hypervisor acceleration (x64 hosts). | `-machine q35` | Handles x64 code execution natively or translated. |
+| **Renesas USB Controller** | Emulated NEC/Renesas XHCI USB 3.0 controller (`nec-usb-xhci`). | Vendor ID: `0x1033`<br/>Device ID: `0x0194` | Guest OS loads the native Renesas-compatible `xhci_hcd` driver. |
+| **AT Command Interface** | Virtual FTDI serial controller (`usb-serial`) piped to host socket. | Mapped to host port `4444` | Exposes `/dev/ttyUSB0` in guest; connects to `mock_modem.py`. |
+| **LTE Network Data** | Virtual CDC Ethernet card (`usb-net`) piped to user network. | Exposes network interface | Provides internet/WAN routing mimicking LTE data. |
 
 ---
 
 ## 2. Repository Structure
 
-- [vm_config.env](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/vm_config.env): Centralized configuration file declaring VM hardware attributes (CPU, RAM, Disk) and modem Vendor/Product IDs.
-- [launch.sh](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/launch.sh): Shell script orchestrator for macOS and Linux hosts. Handles dynamic CPU architecture detection (Intel vs. Apple Silicon) and privilege escalation.
-- [launch.ps1](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/launch.ps1): PowerShell orchestrator for Windows hosts. Manages UsbDk service validation, active device detection, and self-elevation.
+- [vm_config.env](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/vm_config.env): Configuration file declaring VM resources, display parameters, and emulation mode toggles.
+- [mock_modem.py](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/mock_modem.py): Python responder script that runs on the host and replies to modem AT commands (e.g. `ATI`, `AT!GSTATUS?`).
+- [launch.sh](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/launch.sh): Shell orchestrator for macOS/Linux hosts.
+- [launch.ps1](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/launch.ps1): PowerShell orchestrator for Windows hosts.
 
 ---
 
 ## 3. Host Prerequisites
 
 ### macOS Hosts
-1. Install **Homebrew** (if not already installed) from [brew.sh](https://brew.sh).
+1. Install **Homebrew** from [brew.sh](https://brew.sh).
 2. Install QEMU:
    ```bash
    brew install qemu
    ```
+3. Python 3.x is pre-installed (used to run `mock_modem.py`).
 
 ### Windows Hosts
-1. Download and run the QEMU installer for Windows from the [QEMU official website](https://www.qemu.org/download/#windows). Make sure to add `qemu-system-x86_64.exe` to your system's Environment Variables (PATH).
-2. Download and install **UsbDk (USB Development Kit)** from the [SPICE space page](https://www.spice-space.org/download/windows/usbdk/). This driver is required for QEMU to claim USB devices from the Windows kernel.
+1. Download and run the QEMU installer for Windows from the [QEMU official website](https://www.qemu.org/download/#windows). Add it to your System `PATH`.
+2. Python 3.x is required to run the AT command mock daemon.
 
 ---
 
 ## 4. Execution Guide
 
-### macOS / Linux
-To start the VM or install an OS, use the following bash commands:
+To run the full software-emulated environment:
+
+### Step 1: Start the VM (with Ubuntu Server ISO)
+First, boot the VM. Specify your Ubuntu ISO using the `--iso` option:
+
+**On macOS / Linux**:
+```bash
+./launch.sh --iso ubuntu-24.04-live-server-amd64.iso
+```
+
+**On Windows (PowerShell)**:
+```powershell
+.\launch.ps1 -IsoPath ubuntu-24.04-live-server-amd64.iso
+```
+
+### Step 2: Run the Modem Mock Daemon (on Host)
+In a separate terminal window on your host machine, start the Python script to emulate the Sierra Wireless EM7590 AT command processor:
 
 ```bash
-# View command help options
-./launch.sh --help
-
-# Run a Dry Run to verify generated QEMU options
-./launch.sh --dry-run
-
-# Boot VM and mount an installation ISO
-./launch.sh --iso /path/to/operating-system-install.iso
-
-# Boot VM in background (detached mode)
-./launch.sh --background
+python3 mock_modem.py
 ```
-
-> [!IMPORTANT]
-> **Privilege Elevation**: If the Sierra Wireless EM7590 is detected on the host USB bus, the script will automatically invoke `sudo` to gain raw access to the USB subsystem.
+*The daemon will connect to the QEMU guest serial interface and start listening for AT commands.*
 
 ---
 
-### Windows (PowerShell)
-Open an elevated PowerShell window or run the script directly:
+## 5. Guest Operating System Verification (Ubuntu Guest)
 
-```powershell
-# Run a Dry Run to output QEMU command line arguments
-.\launch.ps1 -DryRun
+Once your guest OS is booted, log in and verify the emulated hardware architecture:
 
-# Boot VM and mount an OS installation media
-.\launch.ps1 -IsoPath C:\path\to\operating-system-install.iso
-
-# Run the VM in the background (hidden console window)
-.\launch.ps1 -Background
-```
-
-> [!IMPORTANT]
-> **Administrator Privileges**: Direct USB passthrough on Windows using UsbDk requires Administrator privileges. If run as a standard user while the modem is connected, the script will request permission to elevate itself automatically.
-
----
-
-## 5. Guest Operating System Verification
-
-Once your guest OS (Linux/Windows) is booted, verify the architecture replication:
-
-### Verification in a Linux Guest
-
-1. **Verify XHCI USB Controller (Renesas/NEC Emulation)**:
-   Run `lspci` to verify the PCIe device lists:
-   ```bash
-   lspci -nnk | grep -i xhci
-   ```
-   *Expected Output:*
-   ```text
-   00:1d.0 USB controller [0c03]: NEC Corporation uPD720200 USB 3.0 Host Controller [1033:0194] (rev 03)
-       Kernel driver in use: xhci_hcd
-   ```
-
-2. **Verify USB Modem Attachment**:
-   Check if the Sierra Wireless EM7590 is registered on the USB topology:
-   ```bash
-   lsusb -t
-   ```
-   *Expected Output showing the modem connected to the NEC XHCI controller:*
-   ```text
-   /:  Bus 02.Port 1: Dev 1, Class=root_hub, Driver=xhci_hcd/4p, 5000M
-       |__ Port 1: Dev 2, If 0, Class=Vendor Specific Class, Driver=qmi_wwan, 480M
-       |__ Port 1: Dev 2, If 1, Class=Vendor Specific Class, Driver=option, 480M
-   ```
-
-3. **Verify LTE Modem Interfaces**:
-   Run `ip link` or `nmcli` to verify QMI/MBIM interfaces:
-   ```bash
-   ip link show
-   ```
-   *Verify if `wwan0` or `wwan1` is generated.*
-
----
-
-### Verification in a Windows Guest
-
-1. Open **Device Manager** (`devmgmt.msc`).
-2. Expand **Universal Serial Bus controllers**:
-   - You should see the **Renesas USB 3.0 eXtensible Host Controller**.
-3. Expand **Network adapters** or **Ports (COM & LPT)**:
-   - You should see the **Sierra Wireless Mobile Broadband Adapter** and corresponding AT command/DM serial ports.
-
----
-
-## 6. Troubleshooting
-
-### 1. Sierra Wireless Modem is not detected on macOS Host
-If the script prints that the modem is not detected, check if the device is plugged in using:
+### 1. Verify Renesas USB 3.0 controller
 ```bash
-system_profiler SPUSBDataType
+lspci -nnk | grep -i xhci
 ```
-Look for `Sierra Wireless` or `Vendor ID: 0x1199`. If it's connected but macOS kernel is claiming it, the VM will boot but the device won't pass through. Disconnect other WWAN profiles or third-party connection managers on the host.
+*Expected Output:*
+```text
+00:1d.0 USB controller [0c03]: NEC Corporation uPD720200 USB 3.0 Host Controller [1033:0194] (rev 03)
+    Kernel driver in use: xhci_hcd
+```
 
-### 2. UsbDk fails to grab the USB device on Windows Host
-If you encounter `libusb: [sys_claim_interface] ...` errors on Windows, ensure the UsbDk service is active:
-```powershell
-Get-Service "UsbDk"
+### 2. Verify Emulated USB Devices
+List all USB devices attached to the virtual bus:
+```bash
+lsusb -t
 ```
-If the status is not "Running", start it using `Start-Service "UsbDk"` in an Administrator PowerShell console. If problems persist, you can use the **Zadig** tool to replace the device's host driver with **WinUSB** or **libusb-win32**, though this prevents host OS usage until restored.
+*Expected Output showing the virtual serial interface and USB network card attached to the NEC XHCI hub:*
+```text
+/:  Bus 02.Port 1: Dev 1, Class=root_hub, Driver=xhci_hcd/4p, 5000M
+    |__ Port 1: Dev 2, If 0, Class=Vendor Specific Class, Driver=ftdi_sio, 12M
+    |__ Port 2: Dev 3, If 0, Class=Communications, Driver=cdc_ether, 480M
+```
+
+### 3. Verify AT Command Communication
+You can send AT queries to the virtual modem device (mapped to `/dev/ttyUSB0` or `/dev/ttyACM0`):
+```bash
+# Install screen or minicom to talk to the port, or use screen directly:
+screen /dev/ttyUSB0 115200
+```
+Type `ATE1` (enable local echo) and query the modem profile:
+```text
+ATI
+Manufacturer: Sierra Wireless, Inc.
+Model: EM7590
+Revision: SWI9X50C_01.14.02.00
+IMEI: 359123456789012
+IMEI SV: 02
++GCAP: +CGSM,+DS,+ES
+
+OK
+
+AT!GSTATUS?
+!GSTATUS: 
+Current Time:  36250      Temperature: 36
+Bootup Time:   450        Mode:        ONLINE
+System mode:   LTE        PS state:    ATTACHED
+LTE band:      B3         LTE bw:      20 MHz
+LTE Rx chan:   1650       LTE Tx chan: 19650
+EMM state:     Registered Normal Service
+RRC state:     RRC Connected
+IMS reg state: No Srv
+
+PCC RxM RSSI:  -64        PCC RxD RSSI:  -65
+PCC LNA state: Low
+PCC Tx Power:  10         TAC:         BEEF (48879)
+Cell ID:       01234567 (19088743)
+
+OK
+```
+*(To exit the screen session, press `Ctrl+A` then `K` and confirm with `y`.)*
+
+---
+
+## 6. How to Switch to Physical Hardware Passthrough
+
+If you ever obtain a physical PCIe Renesas uPD720202 USB controller or a physical Sierra Wireless EM7590 USB dongle and want to test native hardware passthrough:
+
+1. Open [vm_config.env](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/vm_config.env).
+2. Set `MOCK_MODE="false"`.
+3. Save the file and restart the launcher script. The orchestrator will dynamically switch to probing and capturing the physical USB addresses instead of running the software emulators.

@@ -49,6 +49,8 @@ $UsbType = $Config["USB_CONTROLLER_TYPE"]
 $UsbId = $Config["USB_CONTROLLER_ID"]
 $ModemVid = $Config["MODEM_VENDOR_ID"]
 $ModemPid = $Config["MODEM_PRODUCT_ID"]
+$MockMode = $Config["MOCK_MODE"]
+$MockSerialPort = $Config["MOCK_SERIAL_PORT"]
 
 Write-Host "[+] Initializing Renesas & Sierra QEMU Architecture on Windows..." -ForegroundColor Green
 
@@ -99,59 +101,70 @@ if (-not (Test-Path $DiskPath)) {
 $AccelFlags = "-accel whpx -cpu host"
 Write-Host "[+] Enabling Windows Hypervisor Platform acceleration (whpx)" -ForegroundColor Gray
 
-# 4. USB Driver & Hardware Passthrough Verification (UsbDk)
-$UsbFlags = ""
+# 4. USB Driver & Hardware Configuration (Sierra Wireless EM7590 / Mock Emulation)
+$UsbFlags = @()
 $PassthroughActive = $false
 
-# Parse Vid/Pid to format suitable for device querying (e.g. 1199 and c081)
-$VidClean = $ModemVid -replace "0x", ""
-$PidClean = $ModemPid -replace "0x", ""
-
-Write-Host "[+] Checking for physical Sierra Wireless EM7590 (VID: $ModemVid, PID: $ModemPid)..." -ForegroundColor Gray
-# Query connected PNP devices for a match
-$PnpDevices = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue
-if ($PnpDevices) {
-    $MatchingDevice = $PnpDevices | Where-Object { 
-        $_.InstanceId -match "VID_$VidClean.+PID_$PidClean" -or 
-        $_.HardwareID -match "VID_$VidClean&PID_$PidClean" 
-    }
-    if ($MatchingDevice) {
-        Write-Host "[+] Detected Sierra Wireless EM7590 connected to Windows host USB bus!" -ForegroundColor Green
-        $PassthroughActive = $true
-    }
-}
-
-if ($PassthroughActive) {
-    # Check for UsbDk installation
-    Write-Host "[+] Checking if UsbDk (USB Development Kit) driver is installed..." -ForegroundColor Gray
-    $UsbDkService = Get-Service "UsbDk" -ErrorAction SilentlyContinue
-    if (-not $UsbDkService -or $UsbDkService.Status -ne "Running") {
-        Write-Host "[!] Warning: UsbDk service is not running or not installed." -ForegroundColor Yellow
-        Write-Host "    UsbDk is required on Windows hosts for QEMU USB passthrough." -ForegroundColor Yellow
-        Write-Host "    Download it from: https://www.spice-space.org/download/windows/usbdk/" -ForegroundColor Yellow
-        Write-Host "    Falling back to boot VM without USB modem passthrough." -ForegroundColor Yellow
-        $PassthroughActive = $false
-    } else {
-        # UsbDk requires Admin privileges
-        $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-        $Principal = New-Object Security.Principal.WindowsPrincipal($Identity)
-        $IsAdmin = $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-        
-        if (-not $IsAdmin -and -not $DryRun) {
-            Write-Host "[!] Privilege Elevation Required: UsbDk USB Passthrough requires Administrator privileges." -ForegroundColor Yellow
-            Write-Host "    Relaunching PowerShell script as Administrator..." -ForegroundColor Yellow
-            $ArgsList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-            if ($IsoPath) { $ArgsList += " -IsoPath `"$IsoPath`"" }
-            if ($Background) { $ArgsList += " -Background" }
-            Start-Process powershell -ArgumentList $ArgsList -Verb RunAs
-            exit
-        }
-        $UsbFlags = "-device usb-host,bus=$UsbId.0,vendorid=$ModemVid,productid=$ModemPid"
-        Write-Host "[+] Configuration: UsbDk USB passthrough enabled." -ForegroundColor Green
-    }
+if ($MockMode -eq "true") {
+    Write-Host "[+] Running in 100% Software Emulation / Mock Mode (MOCK_MODE=true)." -ForegroundColor Green
+    Write-Host "[+] Attaching virtual USB-serial port linked to TCP port $MockSerialPort (AT commands)..." -ForegroundColor Gray
+    Write-Host "[+] Attaching virtual USB-net adapter linked to user network (mobile broadband)..." -ForegroundColor Gray
+    
+    $UsbFlags += @("-chardev", "socket,id=modem_serial,host=127.0.0.1,port=$MockSerialPort,server=on,wait=off")
+    $UsbFlags += @("-device", "usb-serial,bus=$UsbId.0,chardev=modem_serial")
+    $UsbFlags += @("-netdev", "user,id=net_modem")
+    $UsbFlags += @("-device", "usb-net,bus=$UsbId.0,netdev=net_modem")
 } else {
-    Write-Host "[!] Warning: Sierra Wireless EM7590 was not detected on Windows USB bus." -ForegroundColor Yellow
-    Write-Host "    The VM will start WITHOUT direct hardware passthrough." -ForegroundColor Yellow
+    # Parse Vid/Pid to format suitable for device querying (e.g. 1199 and c081)
+    $VidClean = $ModemVid -replace "0x", ""
+    $PidClean = $ModemPid -replace "0x", ""
+
+    Write-Host "[+] Checking for physical Sierra Wireless EM7590 (VID: $ModemVid, PID: $ModemPid)..." -ForegroundColor Gray
+    # Query connected PNP devices for a match
+    $PnpDevices = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue
+    if ($PnpDevices) {
+        $MatchingDevice = $PnpDevices | Where-Object { 
+            $_.InstanceId -match "VID_$VidClean.+PID_$PidClean" -or 
+            $_.HardwareID -match "VID_$VidClean&PID_$PidClean" 
+        }
+        if ($MatchingDevice) {
+            Write-Host "[+] Detected Sierra Wireless EM7590 connected to Windows host USB bus!" -ForegroundColor Green
+            $PassthroughActive = $true
+        }
+    }
+
+    if ($PassthroughActive) {
+        # Check for UsbDk installation
+        Write-Host "[+] Checking if UsbDk (USB Development Kit) driver is installed..." -ForegroundColor Gray
+        $UsbDkService = Get-Service "UsbDk" -ErrorAction SilentlyContinue
+        if (-not $UsbDkService -or $UsbDkService.Status -ne "Running") {
+            Write-Host "[!] Warning: UsbDk service is not running or not installed." -ForegroundColor Yellow
+            Write-Host "    UsbDk is required on Windows hosts for QEMU USB passthrough." -ForegroundColor Yellow
+            Write-Host "    Download it from: https://www.spice-space.org/download/windows/usbdk/" -ForegroundColor Yellow
+            Write-Host "    Falling back to boot VM without USB modem passthrough." -ForegroundColor Yellow
+            $PassthroughActive = $false
+        } else {
+            # UsbDk requires Admin privileges
+            $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $Principal = New-Object Security.Principal.WindowsPrincipal($Identity)
+            $IsAdmin = $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            
+            if (-not $IsAdmin -and -not $DryRun) {
+                Write-Host "[!] Privilege Elevation Required: UsbDk USB Passthrough requires Administrator privileges." -ForegroundColor Yellow
+                Write-Host "    Relaunching PowerShell script as Administrator..." -ForegroundColor Yellow
+                $ArgsList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+                if ($IsoPath) { $ArgsList += " -IsoPath `"$IsoPath`"" }
+                if ($Background) { $ArgsList += " -Background" }
+                Start-Process powershell -ArgumentList $ArgsList -Verb RunAs
+                exit
+            }
+            $UsbFlags = @("-device", "usb-host,bus=$UsbId.0,vendorid=$ModemVid,productid=$ModemPid")
+            Write-Host "[+] Configuration: UsbDk USB passthrough enabled." -ForegroundColor Green
+        }
+    } else {
+        Write-Host "[!] Warning: Sierra Wireless EM7590 was not detected on Windows USB bus." -ForegroundColor Yellow
+        Write-Host "    The VM will start WITHOUT direct hardware passthrough." -ForegroundColor Yellow
+    }
 }
 
 # 5. Build QEMU Arguments
@@ -171,9 +184,7 @@ $QemuArgs = @(
 )
 
 if ($UsbFlags) {
-    # Add raw string flags split by whitespace
-    $QemuArgs += "-device"
-    $QemuArgs += "usb-host,bus=$UsbId.0,vendorid=$ModemVid,productid=$ModemPid"
+    $QemuArgs += $UsbFlags
 }
 
 if ($IsoPath) {
