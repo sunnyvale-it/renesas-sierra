@@ -224,3 +224,25 @@ If you ever obtain a physical PCIe Renesas uPD720202 USB controller or a physica
 1. Open [vm_config.env](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/vm_config.env).
 2. Set `MOCK_MODE="false"`.
 3. Save the file and restart the launcher script. The orchestrator will dynamically switch to probing and capturing the physical USB addresses instead of running the software emulators.
+
+---
+
+## 7. Troubleshooting
+
+### 1. "Display output is not active" Warning in Cocoa GUI
+Because the guest system is a headless **Ubuntu Cloud Image**, the Linux kernel redirects all system console output and the interactive shell login to the serial port (`/dev/ttyS0` / serial line) rather than initializing a graphical display framebuffer. 
+* This message is **normal and expected**. 
+* The graphics console is disabled to save guest resources; use either the **Serial Console** (`nc 127.0.0.1 4445`) or **SSH** (`ssh -i vm_key -p 2222 ubuntu@127.0.0.1`) to interact with the guest VM.
+
+### 2. "Connection reset by peer" or SSH Failures
+If you get a connection reset when attempting to SSH on port 2222:
+* **Host Key Conflicts**: Your host may have cached a host key from a previous VM instance under the same port. Clear it with:
+  ```bash
+  ssh-keygen -R "[127.0.0.1]:2222"
+  ```
+* **NoCloud ISO Label**: `cloud-init` requires the attached metadata configuration drive to have the volume label `cidata` (or `CIDATA`). The launcher script handles this automatically via `hdiutil makehybrid -default-volume-name cidata`. If the ISO is generated manually without this label, `cloud-init` will ignore it and fail to spawn the SSH service.
+* **Stripped Kernel Modules**: Cloud images omit hardware-specific drivers like `ftdi_sio` and `cdc_ether` by default. The launcher installs `linux-modules-extra-generic` automatically via cloud-config. If they are missing on a custom image, you can install them manually:
+  ```bash
+  sudo apt-get update && sudo apt-get install -y linux-modules-extra-$(uname -r)
+  ```
+

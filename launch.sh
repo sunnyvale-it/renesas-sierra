@@ -81,6 +81,10 @@ if [[ ! -f "$DISK_PATH" ]]; then
     fi
 else
     echo "[+] Using existing disk image at: $DISK_PATH"
+    if [[ "$DRY_RUN" = false ]]; then
+        echo "[+] Ensuring disk image is resized to $VM_DISK_SIZE..."
+        qemu-img resize "$DISK_PATH" "$VM_DISK_SIZE" > /dev/null 2>&1 || true
+    fi
 fi
 
 # 2.5 Cloud-Init Configuration (For Ubuntu Cloud Images)
@@ -112,8 +116,11 @@ chpasswd:
   list: |
     ubuntu:password123
   expire: False
-packages:
-  - linux-modules-extra-generic
+runcmd:
+  - apt-get update
+  - apt-get install -y linux-modules-extra-\$(uname -r)
+  - modprobe ftdi_sio
+  - modprobe cdc_ether
 EOF
 
         echo "local-hostname: renesas-sierra-vm" > "${TEMP_DIR}/meta-data"
