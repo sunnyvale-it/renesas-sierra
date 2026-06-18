@@ -215,6 +215,29 @@ OK
 ```
 *(To exit the screen session, press `Ctrl+A` then `K` and confirm with `y`.)*
 
+### 4. Running the Diagnostic & Stress Testing Scripts
+
+The workspace contains three integration and testing scripts that are automatically mounted and copied to the guest home directory `/home/ubuntu/` during initial VM configuration:
+1. **[configure_baseline.sh](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/configure_baseline.sh)**: Toggles kernel command line parameters (ASPM, IOMMU) and USB autosuspend udev rules to replicate or mitigate controller freezes.
+2. **[monitor_modem.sh](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/monitor_modem.sh)**: A live hardware monitor checking PCIe slot state, USB connectivity, AT command interface responsiveness, network link state, and system logs.
+3. **[lte_stress_test.sh](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/lte_stress_test.sh)**: A tool to execute massive HTTP download/upload stress tests bound directly to the mobile broadband/USB interface.
+
+#### Run the Hardware Monitor
+Start the monitoring interface to observe live device connectivity and state changes:
+```bash
+sudo /home/ubuntu/monitor_modem.sh
+```
+
+#### Run the LTE Throughput Stress Test
+To trigger a fast, single-cycle test (e.g. 10MB download, 5MB upload) forced over the auto-detected mobile interface:
+```bash
+sudo /home/ubuntu/lte_stress_test.sh -d 10 -u 5
+```
+To run an infinite stress-loop simulating persistent high-volume cell traffic until manually stopped with `Ctrl+C`:
+```bash
+sudo /home/ubuntu/lte_stress_test.sh -d 100 -u 50 --stress
+```
+
 ---
 
 ## 6. How to Switch to Physical Hardware Passthrough

@@ -116,11 +116,18 @@ chpasswd:
   list: |
     ubuntu:password123
   expire: False
+mounts:
+  - [ host_share, /mnt/host_share, 9p, "trans=virtio,version=9p2000.L,_netdev", "0", "0" ]
 runcmd:
   - apt-get update
   - apt-get install -y linux-modules-extra-\$(uname -r)
   - modprobe ftdi_sio
   - modprobe cdc_ether
+  - cp /mnt/host_share/configure_baseline.sh /home/ubuntu/
+  - cp /mnt/host_share/monitor_modem.sh /home/ubuntu/
+  - cp /mnt/host_share/lte_stress_test.sh /home/ubuntu/
+  - chown ubuntu:ubuntu /home/ubuntu/*.sh
+  - chmod +x /home/ubuntu/*.sh
 EOF
 
         echo "local-hostname: renesas-sierra-vm" > "${TEMP_DIR}/meta-data"
@@ -295,6 +302,8 @@ QEMU_CMD+=(
     -drive "file=${DISK_PATH},format=qcow2,if=none,id=bootdisk"
     -device "virtio-blk-pci,drive=bootdisk,bootindex=1"
     -serial telnet:127.0.0.1:4445,server=on,wait=off
+    -fsdev local,id=fsdev0,path="${SCRIPT_DIR}",security_model=none
+    -device virtio-9p-pci,fsdev=fsdev0,mount_tag=host_share
 )
 
 # Append Renesas uPD720202 compatible XHCI controller

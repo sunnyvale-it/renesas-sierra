@@ -255,6 +255,9 @@ $QemuArgs = @(
     "-netdev", "user,id=net0,hostfwd=tcp::2222-:22",
     "-drive", "file=`"$DiskPath`",format=qcow2,if=none,id=bootdisk",
     "-device", "virtio-blk-pci,drive=bootdisk,bootindex=1",
+    "-serial", "telnet:127.0.0.1:4445,server=on,wait=off",
+    "-fsdev", "local,id=fsdev0,path=`"$ScriptDir`",security_model=none",
+    "-device", "virtio-9p-pci,fsdev=fsdev0,mount_tag=host_share",
     "-device", "$UsbType,id=$UsbId"
 )
 

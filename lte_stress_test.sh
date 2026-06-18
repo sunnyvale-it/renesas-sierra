@@ -95,10 +95,27 @@ UPLOAD_SIZE_MB=${UPLOAD_SIZE_MB:-$DEFAULT_UPLOAD_SIZE_MB}
 if [ -z "$INTERFACE" ]; then
     echo -e "${YELLOW}[*] No interface specified. Attempting auto-detection...${NC}"
     # Look for active network interfaces starting with wwan or wwp
-    DETECTED_IFS=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(wwan|wwp)')
+    DETECTED_IFS=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(wwan|wwp)' || true)
     
+    # Fallback: Look for USB network devices (e.g. mock interface)
     if [ -z "$DETECTED_IFS" ]; then
-        echo -e "${RED}[-] Error: Could not auto-detect any cellular interface (starting with wwan/wwp).${NC}" >&2
+        for dev in /sys/class/net/*; do
+            if [ -e "$dev" ]; then
+                dev_name=$(basename "$dev")
+                if [ "$dev_name" = "lo" ]; then
+                    continue
+                fi
+                dev_path=$(readlink -f "$dev" 2>/dev/null || true)
+                if echo "$dev_path" | grep -qE "/usb[0-9]+/|/usb[0-9]+-[0-9]+"; then
+                    DETECTED_IFS="$dev_name"
+                    break
+                fi
+            fi
+        done
+    fi
+
+    if [ -z "$DETECTED_IFS" ]; then
+        echo -e "${RED}[-] Error: Could not auto-detect any cellular/USB interface.${NC}" >&2
         echo -e "${YELLOW}[!] Please specify your LTE interface manually using the -i/--interface option.${NC}" >&2
         exit 1
     fi
