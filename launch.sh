@@ -112,6 +112,8 @@ chpasswd:
   list: |
     ubuntu:password123
   expire: False
+packages:
+  - linux-modules-extra-generic
 EOF
 
         echo "local-hostname: renesas-sierra-vm" > "${TEMP_DIR}/meta-data"
