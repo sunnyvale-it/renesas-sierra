@@ -12,27 +12,27 @@ The following diagram illustrates how the host hardware and QEMU hypervisor map 
 
 ```mermaid
 graph TD
-    subgraph Host System (macOS or Windows)
-        HostOS[Host OS Kernel]
-        PhysModem[Sierra Wireless EM7590<br/>USB Device: 1199:c081]
+    subgraph "Host System (macOS or Windows)"
+        HostOS["Host OS Kernel"]
+        PhysModem["Sierra Wireless EM7590<br/>USB Device: 1199:c081"]
     end
 
-    subgraph QEMU x86_64 Virtual Machine
-        GuestKernel[Guest OS Kernel<br/>Linux or Windows]
+    subgraph "QEMU x86_64 Virtual Machine"
+        GuestKernel["Guest OS Kernel<br/>Linux or Windows"]
         
-        subgraph Emulated PCIe Topology
-            VM_CPU[x64 Virtual CPU]
-            XHCI[Renesas/NEC compatible XHCI<br/>nec-usb-xhci Controller]
+        subgraph "Emulated PCIe Topology"
+            VM_CPU["x64 Virtual CPU"]
+            XHCI["Renesas/NEC compatible XHCI<br/>nec-usb-xhci Controller"]
         end
         
-        subgraph Emulated USB Topology
-            VM_Modem[Replicated EM7590 Modem<br/>Attached to xhci0.0]
+        subgraph "Emulated USB Topology"
+            VM_Modem["Replicated EM7590 Modem<br/>Attached to xhci0.0"]
         end
     end
 
-    PhysModem -.->|USB Host Passthrough<br/>via LibUSB/UsbDk| VM_Modem
-    XHCI ===>|PCIe Bus Interface| VM_CPU
-    VM_Modem ===>|USB 3.0 Protocol| XHCI
+    PhysModem -.->|"USB Host Passthrough<br/>via LibUSB/UsbDk"| VM_Modem
+    XHCI ===>|"PCIe Bus Interface"| VM_CPU
+    VM_Modem ===>|"USB 3.0 Protocol"| XHCI
 ```
 
 ### Component Mapping Details
