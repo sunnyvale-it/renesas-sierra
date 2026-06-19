@@ -98,12 +98,10 @@ if [[ -z "$ISO_PATH" ]]; then
     # Automatically prune conflicting host key entries on port 2222
     ssh-keygen -R "[127.0.0.1]:2222" &>/dev/null || true
 
-    if command -v hdiutil &> /dev/null; then
-        echo "[+] Generating cloud-init.iso to configure Ubuntu Cloud Image login..."
-        rm -f "${SCRIPT_DIR}/cloud-init.iso"
-        TEMP_DIR=$(mktemp -d)
-        
-        cat <<EOF > "${TEMP_DIR}/user-data"
+    rm -f "${SCRIPT_DIR}/cloud-init.iso"
+    TEMP_DIR=$(mktemp -d)
+    
+    cat <<EOF > "${TEMP_DIR}/user-data"
 #cloud-config
 ssh_pwauth: True
 users:
@@ -130,10 +128,10 @@ runcmd:
   - chmod +x /home/ubuntu/*.sh
 EOF
 
-        echo "local-hostname: renesas-sierra-vm" > "${TEMP_DIR}/meta-data"
-        echo "instance-id: i-renesas-sierra-vm-$(date +%s)" >> "${TEMP_DIR}/meta-data"
+    echo "local-hostname: renesas-sierra-vm" > "${TEMP_DIR}/meta-data"
+    echo "instance-id: i-renesas-sierra-vm-$(date +%s)" >> "${TEMP_DIR}/meta-data"
 
-        cat <<EOF > "${TEMP_DIR}/network-config"
+    cat <<EOF > "${TEMP_DIR}/network-config"
 version: 2
 ethernets:
   enp0s2:
@@ -151,24 +149,63 @@ ethernets:
     optional: true
 EOF
 
+    ISO_CREATED=false
+    if command -v hdiutil &> /dev/null; then
+        echo "[+] Generating cloud-init.iso via hdiutil (macOS)..."
         hdiutil makehybrid -o "${SCRIPT_DIR}/cloud-init.iso" -hfs -joliet -iso -default-volume-name cidata "${TEMP_DIR}" > /dev/null 2>&1 || true
-        rm -rf "${TEMP_DIR}"
+        ISO_CREATED=true
+    elif command -v genisoimage &> /dev/null; then
+        echo "[+] Generating cloud-init.iso via genisoimage (Linux)..."
+        genisoimage -output "${SCRIPT_DIR}/cloud-init.iso" -volid cidata -joliet -rock "${TEMP_DIR}" > /dev/null 2>&1 || true
+        ISO_CREATED=true
+    elif command -v mkisofs &> /dev/null; then
+        echo "[+] Generating cloud-init.iso via mkisofs (Linux)..."
+        mkisofs -output "${SCRIPT_DIR}/cloud-init.iso" -volid cidata -joliet -rock "${TEMP_DIR}" > /dev/null 2>&1 || true
+        ISO_CREATED=true
+    elif command -v xorrisofs &> /dev/null; then
+        echo "[+] Generating cloud-init.iso via xorrisofs (Linux)..."
+        xorrisofs -output "${SCRIPT_DIR}/cloud-init.iso" -volid cidata -joliet -rock "${TEMP_DIR}" > /dev/null 2>&1 || true
+        ISO_CREATED=true
+    fi
+
+    rm -rf "${TEMP_DIR}"
+    if [[ "$ISO_CREATED" = true ]]; then
         echo "[+] Created cloud-init.iso (Username: 'ubuntu', Password: 'password123')."
+    else
+        echo "[!] Warning: No ISO generation tool found (hdiutil, genisoimage, mkisofs, or xorrisofs). Skipping cloud-init.iso generation."
     fi
 fi
 
 
 # 3. CPU Acceleration Detection
+HOST_OS="$(uname -s)"
 HOST_ARCH="$(uname -m)"
 ACCEL_FLAGS=""
 
-echo "[+] Host architecture detected: ${HOST_ARCH}"
-if [[ "$HOST_ARCH" == "x86_64" || "$HOST_ARCH" == "i386" ]]; then
-    echo "[+] Enabling hardware acceleration via macOS Hypervisor.framework (hvf)"
-    ACCEL_FLAGS="-accel hvf -cpu host"
+echo "[+] Host OS: ${HOST_OS}, Architecture: ${HOST_ARCH}"
+if [[ "$HOST_OS" == "Darwin" ]]; then
+    if [[ "$HOST_ARCH" == "x86_64" || "$HOST_ARCH" == "i386" ]]; then
+        echo "[+] Enabling hardware acceleration via macOS Hypervisor.framework (hvf)"
+        ACCEL_FLAGS="-accel hvf -cpu host"
+    else
+        echo "[!] Warning: macOS Host is ARM64. x64 virtualization requires TCG software emulation."
+        ACCEL_FLAGS="-accel tcg,thread=multi -cpu max"
+    fi
+elif [[ "$HOST_OS" == "Linux" ]]; then
+    if [[ "$HOST_ARCH" == "x86_64" || "$HOST_ARCH" == "i386" ]]; then
+        if [[ -c /dev/kvm && -w /dev/kvm ]]; then
+            echo "[+] Enabling hardware acceleration via Linux KVM"
+            ACCEL_FLAGS="-accel kvm -cpu host"
+        else
+            echo "[!] Warning: KVM (/dev/kvm) is not present or writable. Using TCG emulation."
+            ACCEL_FLAGS="-accel tcg,thread=multi -cpu max"
+        fi
+    else
+        echo "[!] Warning: Linux Host is not x64/i386. Using TCG emulation."
+        ACCEL_FLAGS="-accel tcg,thread=multi -cpu max"
+    fi
 else
-    echo "[!] Warning: Host is ARM64 (Apple Silicon). x64 virtualization requires TCG software emulation."
-    echo "    Performance will be significantly reduced."
+    echo "[!] Warning: Unknown Host OS. Using TCG emulation."
     ACCEL_FLAGS="-accel tcg,thread=multi -cpu max"
 fi
 
@@ -185,7 +222,7 @@ if [[ "${MOCK_MODE:-false}" == "true" ]]; then
     USB_FLAGS+=" -device usb-serial,bus=${USB_CONTROLLER_ID}.0,chardev=modem_serial"
     USB_FLAGS+=" -netdev user,id=net_modem,net=10.0.3.0/24 -device usb-net,bus=${USB_CONTROLLER_ID}.0,netdev=net_modem"
 else
-    # On macOS, check if the USB device is present using system_profiler
+    # Check if the physical USB device is present (system_profiler on macOS, lsusb on Linux)
     echo "[+] Checking for physical Sierra Wireless EM7590 (VID: $MODEM_VENDOR_ID, PID: $MODEM_PRODUCT_ID)..."
     if command -v system_profiler &> /dev/null; then
         # Convert config IDs (e.g. 0x1199) to lower-case standard formats for grepping
@@ -207,12 +244,19 @@ else
                 PASSTHROUGH_ACTIVE=true
             fi
         fi
+    elif command -v lsusb &> /dev/null; then
+        V_SHORT=$(echo "$MODEM_VENDOR_ID" | sed 's/0x//i' | tr '[:upper:]' '[:lower:]')
+        P_SHORT=$(echo "$MODEM_PRODUCT_ID" | sed 's/0x//i' | tr '[:upper:]' '[:lower:]')
+        if lsusb -d "${V_SHORT}:${P_SHORT}" &>/dev/null; then
+            echo "[+] Detected Sierra Wireless EM7590 on the host USB bus!"
+            PASSTHROUGH_ACTIVE=true
+        fi
     fi
 
     if [[ "$PASSTHROUGH_ACTIVE" = true ]]; then
-        # Since we are doing USB passthrough, macOS requires root access to detach host claim
+        # Since we are doing USB passthrough, macOS/Linux requires root access to detach host claim
         if [[ "$EUID" -ne 0 && "$DRY_RUN" = false ]]; then
-            echo "[!] Privilege Elevation Required: USB Passthrough on macOS requires 'sudo' privileges."
+            echo "[!] Privilege Elevation Required: USB Passthrough on macOS/Linux requires 'sudo' privileges."
             echo "    Re-running script under sudo..."
             exec sudo "$0" "$@"
         fi
@@ -293,10 +337,18 @@ if [[ ${#UEFI_FLAGS[@]} -gt 0 ]]; then
     QEMU_CMD+=("${UEFI_FLAGS[@]}")
 fi
 
-# Standard peripherals and graphics (virtio / cocoa for macOS)
+# Determine display interface dynamically based on Host OS
+DISPLAY_FLAGS=()
+if [[ "$HOST_OS" == "Darwin" ]]; then
+    DISPLAY_FLAGS=(-display "cocoa,show-cursor=on,zoom-to-fit=on")
+else
+    DISPLAY_FLAGS=(-display "default,show-cursor=on")
+fi
+
+# Standard peripherals and graphics
 QEMU_CMD+=(
     -vga virtio
-    -display cocoa,show-cursor=on,zoom-to-fit=on
+    "${DISPLAY_FLAGS[@]}"
     -device virtio-net-pci,netdev=net0
     -netdev user,id=net0,hostfwd=tcp::2222-:22
     -drive "file=${DISK_PATH},format=qcow2,if=none,id=bootdisk"
