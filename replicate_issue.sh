@@ -162,7 +162,7 @@ trigger_immediate_crash() {
     
     # 1. Unbind the controller inside the guest to simulate controller death
     echo -e "${YELLOW}[*] Unbinding Renesas XHCI controller from xhci_hcd driver...${NC}"
-    run_in_guest "PCI_ADDR=\$(lspci | grep -i -E 'nec corporation|renesas' | awk '{print \$1}' | head -n 1); if [ -n \"\$PCI_ADDR\" ]; then echo \"0000:\$PCI_ADDR\" | sudo tee /sys/bus/pci/drivers/xhci_hcd/unbind; echo \"<3>xhci_hcd 0000:\$PCI_ADDR: xHCI host not responding to stop endpoint command\" | sudo tee /dev/kmsg; echo \"<3>xhci_hcd 0000:\$PCI_ADDR: HC died; cleaning up\" | sudo tee /dev/kmsg; fi"
+    run_in_guest "PCI_ADDR=\$(lspci | grep -i -E 'nec corporation|renesas' | awk '{print \$1}' | head -n 1); if [ -n \"\$PCI_ADDR\" ]; then if [ -e \"/sys/bus/pci/drivers/xhci_hcd/0000:\$PCI_ADDR\" ]; then echo \"0000:\$PCI_ADDR\" | sudo tee /sys/bus/pci/drivers/xhci_hcd/unbind; fi; echo \"<3>xhci_hcd 0000:\$PCI_ADDR: xHCI host not responding to stop endpoint command\" | sudo tee /dev/kmsg; echo \"<3>xhci_hcd 0000:\$PCI_ADDR: HC died; cleaning up\" | sudo tee /dev/kmsg; fi"
     
     # 2. Trigger the mock modem to disconnect by writing flag file
     echo -e "${YELLOW}[*] Triggering simulated bootloader crash loop (PID c082)...${NC}"
@@ -182,7 +182,7 @@ recover_modem() {
     
     # 1. Bind the controller back to xhci_hcd inside the guest
     echo -e "${YELLOW}[*] Re-binding Renesas XHCI controller to xhci_hcd driver...${NC}"
-    run_in_guest "PCI_ADDR=\$(lspci | grep -i -E 'nec corporation|renesas' | awk '{print \$1}' | head -n 1); if [ -n \"\$PCI_ADDR\" ]; then echo \"0000:\$PCI_ADDR\" | sudo tee /sys/bus/pci/drivers/xhci_hcd/bind; fi"
+    run_in_guest "PCI_ADDR=\$(lspci | grep -i -E 'nec corporation|renesas' | awk '{print \$1}' | head -n 1); if [ -n \"\$PCI_ADDR\" ]; then if [ ! -e \"/sys/bus/pci/drivers/xhci_hcd/0000:\$PCI_ADDR\" ]; then echo \"0000:\$PCI_ADDR\" | sudo tee /sys/bus/pci/drivers/xhci_hcd/bind; else echo \"Controller is already bound to xhci_hcd driver.\"; fi; fi"
     
     # 2. Remove the mock crash flag
     if [ -f "$CRASH_FILE" ]; then
