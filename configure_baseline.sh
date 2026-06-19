@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# OnLogic HX521 / Sierra EM7590 / Renesas uPD720202 Integration & Testing Tool
+# Sierra EM7590 / Renesas uPD720202 Integration & Testing Tool
 # This script automates toggling between the STABLE (Stabilised) environment 
 # and the BUG (Reproduction) environment on standard Linux (Debian/Ubuntu/Arch) hosts.
 #
