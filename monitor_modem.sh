@@ -56,7 +56,12 @@ while true; do
         PCI_STATUS=$(lspci -d "$RENESAS_PCI_MOCK" 2>/dev/null)
     fi
     if [ -n "$PCI_STATUS" ]; then
-        echo -e "PCIe Controller:  ${GREEN}DETECTED${NC} - $PCI_STATUS"
+        PCI_ADDR=$(echo "$PCI_STATUS" | awk '{print $1}')
+        if lspci -k -s "$PCI_ADDR" | grep -q "Kernel driver in use:"; then
+            echo -e "PCIe Controller:  ${GREEN}DETECTED${NC} - $PCI_STATUS"
+        else
+            echo -e "PCIe Controller:  ${RED}ERROR${NC} - $PCI_STATUS (xHCI Driver Detached/Crashed!)"
+        fi
     else
         echo -e "PCIe Controller:  ${RED}MISSING${NC} (The Renesas card might have disappeared from the PCIe bus!)"
     fi
