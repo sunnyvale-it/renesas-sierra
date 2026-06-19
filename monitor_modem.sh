@@ -130,7 +130,7 @@ while true; do
     fi
 
     # 5. Check Kernel Log for Controller Deaths or Command Timeouts
-    KERNEL_ERRORS=$(dmesg | tail -n 50 | grep -Ei "xhci_hcd|hc died|command timeout|not responding" | tail -n 2)
+    KERNEL_ERRORS=$(dmesg | tail -n 50 | grep -Ei "hc died|command timeout|not responding|xhci_hcd.*(died|timeout|failed|error|abort)" | tail -n 2)
     if [ -n "$KERNEL_ERRORS" ]; then
         echo -e "${RED}[!] Kernel Alert detected in xHCI host controller logs:${NC}"
         echo -e "$KERNEL_ERRORS"
