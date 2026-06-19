@@ -6,9 +6,9 @@
 # by triggering a simulated PCIe USB controller driver crash in the Guest.
 #
 # Usage:
-#   ./replicate_issue.sh --trigger   - Triggers the simulated hardware crash loop (PID c082)
-#   ./replicate_issue.sh --recover   - Recovers the modem back to healthy state (PID 90d3)
-#   ./replicate_issue.sh --status    - Checks the replication state
+#   ./replicate_issue.sh --trigger [auto] - Triggers immediate or load-based hardware crash
+#   ./replicate_issue.sh --recover        - Recovers the controller and modem back to online mode
+#   ./replicate_issue.sh --status         - Checks the replication state
 #
 
 set -euo pipefail
@@ -28,10 +28,12 @@ show_help() {
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
-    echo "  --trigger   Trigger the simulated controller crash / bootloader loop"
-    echo "  --recover   Recover/reset the controller and modem back to online mode"
-    echo "  --status    View active replication status"
-    echo "  --help      Show this helper"
+    echo "  --trigger [auto]   Trigger the simulated controller crash. If 'auto' is passed,"
+    echo "                     it monitors guest network load and triggers autonomously after"
+    echo "                     a delay of heavy traffic (reproducing the real 4-minute load bug)."
+    echo "  --recover          Recover/reset the controller and modem back to online mode"
+    echo "  --status           View active replication status"
+    echo "  --help             Show this helper"
     echo ""
 }
 
@@ -39,21 +41,123 @@ show_help() {
 run_in_guest() {
     local cmd="$1"
     if [ -d "/sys/bus/pci/drivers/xhci_hcd" ]; then
-        # Running directly inside the guest
         eval "$cmd"
     else
-        # Running on host, execute via SSH
         local vm_key_path="${SCRIPT_DIR}/vm_key"
         if [ -f "$vm_key_path" ]; then
             ssh -i "$vm_key_path" -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@127.0.0.1 "$cmd" 2>/dev/null || true
         else
-            # Try to run ssh anyway with default config
             ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@127.0.0.1 "$cmd" 2>/dev/null || true
         fi
     fi
 }
 
-trigger_crash() {
+check_guest_unoptimised() {
+    if [ -d "/sys/bus/pci/drivers/xhci_hcd" ]; then
+        if ! grep -q "pcie_aspm=off" /proc/cmdline || ! grep -q "iommu=soft" /proc/cmdline; then
+            return 0 # Unoptimised
+        fi
+        return 1 # Optimised
+    else
+        local vm_key_path="${SCRIPT_DIR}/vm_key"
+        local check_cmd="! grep -q 'pcie_aspm=off' /proc/cmdline || ! grep -q 'iommu=soft' /proc/cmdline"
+        if [ -f "$vm_key_path" ]; then
+            if ssh -i "$vm_key_path" -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@127.0.0.1 "$check_cmd" 2>/dev/null; then
+                return 0 # Unoptimised
+            fi
+        else
+            if ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@127.0.0.1 "$check_cmd" 2>/dev/null; then
+                return 0 # Unoptimised
+            fi
+        fi
+        return 1 # Optimised
+    fi
+}
+
+get_network_bytes() {
+    local iface="$1"
+    local rx=0
+    local tx=0
+    if [ -f "/sys/class/net/${iface}/statistics/rx_bytes" ]; then
+        rx=$(cat "/sys/class/net/${iface}/statistics/rx_bytes")
+    fi
+    if [ -f "/sys/class/net/${iface}/statistics/tx_bytes" ]; then
+        tx=$(cat "/sys/class/net/${iface}/statistics/tx_bytes")
+    fi
+    echo $((rx + tx))
+}
+
+detect_guest_interface() {
+    local iface=""
+    for dev in /sys/class/net/*; do
+        if [ -e "$dev" ]; then
+            local dev_name=$(basename "$dev")
+            if [ "$dev_name" = "lo" ]; then continue; fi
+            local dev_path
+            dev_path=$(readlink -f "$dev" 2>/dev/null || true)
+            if echo "$dev_path" | grep -qE "/usb[0-9]+/|/usb[0-9]+-[0-9]+|/wwan"; then
+                iface="$dev_name"
+                break
+            fi
+        fi
+    done
+    if [ -z "$iface" ]; then
+        iface=$(ip link show | grep -E "wwan|wwp|usb" | awk -F': ' '{print $2}' | head -n 1)
+    fi
+    echo "$iface"
+}
+
+monitor_load_and_trigger() {
+    if ! check_guest_unoptimised; then
+        echo -e "${GREEN}[+] System is currently optimised (stabilised). Instability threshold will not trigger under load.${NC}"
+        exit 0
+    fi
+
+    # Detect active USB net interface inside Guest
+    local iface
+    iface=$(detect_guest_interface)
+    if [ -z "$iface" ]; then
+        echo -e "${RED}[-] Error: No active mobile broadband/USB net interface found to monitor.${NC}"
+        exit 1
+    fi
+    
+    local threshold=$((45 + RANDOM % 106)) # 45 to 150 seconds
+    echo -e "${YELLOW}[*] Monitoring network interface '$iface' for heavy traffic load...${NC}"
+    echo -e "${YELLOW}[*] Instability threshold set to ${threshold}s of load before crash.${NC}"
+    echo -e "${BLUE}[*] Start your throughput test now (e.g. lte_stress_test.sh). Waiting for load...${NC}"
+    
+    local prev_bytes
+    prev_bytes=$(get_network_bytes "$iface")
+    local load_duration=0
+    
+    while true; do
+        sleep 2
+        local curr_bytes
+        curr_bytes=$(get_network_bytes "$iface")
+        local diff=$((curr_bytes - prev_bytes))
+        prev_bytes="$curr_bytes"
+        
+        # Rate in KB/s over 2 seconds
+        local rate_kb=$((diff / 2 / 1024))
+        
+        if [ "$rate_kb" -gt 100 ]; then # Stress load active (> 100 KB/s)
+            load_duration=$((load_duration + 2))
+            echo -e "${YELLOW}[!] Load detected: ~${rate_kb} KB/s. Accumulated stress: ${load_duration}/${threshold}s${NC}"
+            
+            if [ "$load_duration" -ge "$threshold" ]; then
+                echo -e "\n${RED}[!] WARNING: Instability threshold reached! Triggering host controller death...${NC}"
+                trigger_immediate_crash
+                break
+            fi
+        else
+            if [ "$load_duration" -gt 0 ]; then
+                load_duration=$((load_duration - 1)) # decay slowly when idle
+            fi
+        fi
+    done
+}
+
+trigger_immediate_crash() {
     echo -e "${YELLOW}[*] Simulating data-peak current spikes and power instability...${NC}"
     
     # 1. Unbind the controller inside the guest to simulate controller death
@@ -114,7 +218,23 @@ fi
 
 case "$1" in
     --trigger)
-        trigger_crash
+        if [[ $# -gt 1 && "$2" == "auto" ]]; then
+            # Perform load-based replication
+            if [ -d "/sys/bus/pci/drivers/xhci_hcd" ]; then
+                monitor_load_and_trigger
+            else
+                echo -e "${YELLOW}[*] Launching load-based crash monitor inside guest VM over SSH...${NC}"
+                local vm_key_path="${SCRIPT_DIR}/vm_key"
+                if [ -f "$vm_key_path" ]; then
+                    ssh -i "$vm_key_path" -p 2222 -t -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@127.0.0.1 "/home/ubuntu/replicate_issue.sh --trigger auto" || true
+                else
+                    ssh -p 2222 -t -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@127.0.0.1 "/home/ubuntu/replicate_issue.sh --trigger auto" || true
+                fi
+            fi
+        else
+            # Perform immediate replication
+            trigger_immediate_crash
+        fi
         ;;
     --recover)
         recover_modem

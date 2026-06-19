@@ -219,52 +219,11 @@ run_upload() {
     echo -e "${GREEN}[+] Upload finished: ${UPLOAD_SIZE_MB}MB in ${duration_sec}s (~${speed_mbps} Mbps)${NC}"
     return 0
 }
-# Check for unoptimised baseline (missing ASPM off or soft IOMMU in kernel)
-is_unoptimised_baseline() {
-    # If /proc/cmdline doesn't exist (e.g. running on host for dry-run), don't trigger crash
-    if [ ! -f /proc/cmdline ]; then
-        return 1
-    fi
-    if ! grep -q "pcie_aspm=off" /proc/cmdline || ! grep -q "iommu=soft" /proc/cmdline; then
-        return 0
-    fi
-    return 1
-}
-
-START_TIME=$(date +%s)
-CRASH_THRESHOLD=0
-if is_unoptimised_baseline; then
-    # Set simulated crash threshold between 45 and 150 seconds of stress load
-    CRASH_THRESHOLD=$((45 + RANDOM % 106))
-    echo -e "${YELLOW}[!] Unoptimised baseline detected. Power & IOMMU instability is active.${NC}"
-    echo -e "${YELLOW}[!] Simulated hardware crash threshold set to ${CRASH_THRESHOLD}s of load.${NC}"
-fi
-
 # Execution loop
 cycle_count=1
 
 while true; do
     echo -e "\n${BLUE}--- Starting Cycle #$cycle_count ---${NC}"
-    
-    # Check if instability threshold has been reached
-    if [ "$CRASH_THRESHOLD" -gt 0 ]; then
-        CURRENT_TIME=$(date +%s)
-        ELAPSED=$((CURRENT_TIME - START_TIME))
-        if [ "$ELAPSED" -ge "$CRASH_THRESHOLD" ]; then
-            echo -e "\n${RED}[!] WARNING: xHCI Host Controller command ring timeout (-110) detected!${NC}"
-            echo -e "${RED}[!] xhci_hcd: HC died; cleaning up. Simulated hardware power sag disconnect!${NC}"
-            
-            # Execute replication script to unbind controller & trigger modem crash loop
-            if [ -f "/home/ubuntu/replicate_issue.sh" ]; then
-                /home/ubuntu/replicate_issue.sh --trigger >/dev/null 2>&1 || true
-            elif [ -f "./replicate_issue.sh" ]; then
-                ./replicate_issue.sh --trigger >/dev/null 2>&1 || true
-            fi
-            
-            echo -e "${RED}[-] Error: LTE interface '$INTERFACE' has been lost!${NC}" >&2
-            exit 2
-        fi
-    fi
 
     # Verify IP before starting each cycle (checks if connection holds)
     CURRENT_IP=$(ip -o -4 addr show dev "$INTERFACE" | awk '{split($4,a,"/"); print a[1]}')
