@@ -75,7 +75,11 @@ while true; do
             echo -e "Modem USB State:  ${YELLOW}UNKNOWN SIERRA STATE${NC} ($USB_STATUS)"
         fi
     elif [ -n "$USB_STATUS_MOCK" ]; then
-        echo -e "Modem USB State:  ${GREEN}ONLINE (MOCK MODE)${NC} [$MOCK_SERIAL_VID_PID]"
+        if [ -f "/mnt/host_share/.modem_crash" ]; then
+            echo -e "Modem USB State:  ${RED}CRASHED/BOOTLOADER LOOP (Simulated)${NC} [1199:$PID_BOOT2]"
+        else
+            echo -e "Modem USB State:  ${GREEN}ONLINE (MOCK MODE)${NC} [$MOCK_SERIAL_VID_PID]"
+        fi
     else
         echo -e "Modem USB State:  ${RED}DISCONNECTED/OFFLINE${NC} (Not visible on the USB bus)"
     fi

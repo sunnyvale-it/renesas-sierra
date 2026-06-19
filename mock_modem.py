@@ -110,15 +110,30 @@ def handle_at_command(cmd: str) -> str:
         return "\r\nOK\r\n"
 
 def main():
+    crash_file = os.path.join(SCRIPT_DIR, ".modem_crash")
     while True:
         try:
+            if os.path.exists(crash_file):
+                # Simulated crash active; wait and retry
+                time.sleep(2)
+                continue
+                
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect(("127.0.0.1", PORT))
             print(f"[+] Connected to QEMU guest serial interface successfully!")
             
+            s.settimeout(1.0) # enable periodic polling of crash file
             buffer = ""
             while True:
-                data = s.recv(1024)
+                if os.path.exists(crash_file):
+                    print("[!] Simulated crash triggered! Dropping guest connection.")
+                    break
+                    
+                try:
+                    data = s.recv(1024)
+                except socket.timeout:
+                    continue
+                
                 if not data:
                     print("[-] Connection closed by QEMU host interface.")
                     break
@@ -140,11 +155,12 @@ def main():
                         response = handle_at_command(cmd_clean)
                         if response:
                             s.sendall(response.encode("utf-8"))
-                            
+            s.close()
         except ConnectionRefusedError:
             time.sleep(2)  # Wait for QEMU to start up and open port
         except socket.error as e:
             print(f"[!] Socket Error: {e}")
+            s.close()
             time.sleep(2)
         except KeyboardInterrupt:
             print("\n[-] Exiting Sierra Wireless EM7590 mock daemon.")

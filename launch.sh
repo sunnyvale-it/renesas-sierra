@@ -124,6 +124,7 @@ runcmd:
   - cp /mnt/host_share/configure_baseline.sh /home/ubuntu/
   - cp /mnt/host_share/monitor_modem.sh /home/ubuntu/
   - cp /mnt/host_share/lte_stress_test.sh /home/ubuntu/
+  - cp /mnt/host_share/replicate_issue.sh /home/ubuntu/
   - chown ubuntu:ubuntu /home/ubuntu/*.sh
   - chmod +x /home/ubuntu/*.sh
 EOF

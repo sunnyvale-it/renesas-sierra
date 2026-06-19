@@ -241,7 +241,7 @@ OK
 
 ### 4. Running the Diagnostic & Stress Testing Scripts
 
-The workspace contains three integration and testing scripts that are automatically mounted and copied to the guest home directory `/home/ubuntu/` during initial VM configuration. These are designed to configure, monitor, and stress-test the hardware integration.
+The workspace contains four integration and testing scripts that are automatically mounted and copied to the guest home directory `/home/ubuntu/` during initial VM configuration. These are designed to configure, monitor, stress-test, and replicate the hardware integration issues.
 
 #### A. Environment Configuration Script (`configure_baseline.sh`)
 This script manages kernel-level parameters and udev policies to toggle between a stable environment and a reproduction (buggy) baseline.
@@ -290,6 +290,26 @@ This script executes heavy HTTP download and upload cycles bound directly to the
 * **Execute infinite throughput stress testing**:
   ```bash
   sudo /home/ubuntu/lte_stress_test.sh -d 100 -u 50 --stress
+  ```
+
+#### D. Issue Replication Script (`replicate_issue.sh`)
+This script simulates the hardware power drops and xHCI driver errors to replicate the bootloader crash loop state (`c082`) in software.
+
+* **Trigger a Simulated Hardware Crash**:
+  Simulate peak-data current drops, terminating the AT serial socket connection and forcing the modem's PID to report the `c082` bootloader crash loop state:
+  ```bash
+  /home/ubuntu/replicate_issue.sh --trigger
+  ```
+  *(Check the host daemon `mock_modem.py` terminal and run the guest monitor script `sudo /home/ubuntu/monitor_modem.sh` to observe the crashed loop state.)*
+* **Recover / Apply Remediation Protocol**:
+  Recover the modem back to healthy online application mode (`90d3`):
+  ```bash
+  /home/ubuntu/replicate_issue.sh --recover
+  ```
+* **Check Simulation Status**:
+  Check the active status of the simulation:
+  ```bash
+  /home/ubuntu/replicate_issue.sh --status
   ```
 
 ---
