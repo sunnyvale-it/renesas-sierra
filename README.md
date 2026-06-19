@@ -217,26 +217,56 @@ OK
 
 ### 4. Running the Diagnostic & Stress Testing Scripts
 
-The workspace contains three integration and testing scripts that are automatically mounted and copied to the guest home directory `/home/ubuntu/` during initial VM configuration:
-1. **[configure_baseline.sh](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/configure_baseline.sh)**: Toggles kernel command line parameters (ASPM, IOMMU) and USB autosuspend udev rules to replicate or mitigate controller freezes.
-2. **[monitor_modem.sh](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/monitor_modem.sh)**: A live hardware monitor checking PCIe slot state, USB connectivity, AT command interface responsiveness, network link state, and system logs.
-3. **[lte_stress_test.sh](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/lte_stress_test.sh)**: A tool to execute massive HTTP download/upload stress tests bound directly to the mobile broadband/USB interface.
+The workspace contains three integration and testing scripts that are automatically mounted and copied to the guest home directory `/home/ubuntu/` during initial VM configuration. These are designed to configure, monitor, and stress-test the hardware integration.
 
-#### Run the Hardware Monitor
-Start the monitoring interface to observe live device connectivity and state changes:
-```bash
-sudo /home/ubuntu/monitor_modem.sh
-```
+#### A. Environment Configuration Script (`configure_baseline.sh`)
+This script manages kernel-level parameters and udev policies to toggle between a stable environment and a reproduction (buggy) baseline.
 
-#### Run the LTE Throughput Stress Test
-To trigger a fast, single-cycle test (e.g. 10MB download, 5MB upload) forced over the auto-detected mobile interface:
-```bash
-sudo /home/ubuntu/lte_stress_test.sh -d 10 -u 5
-```
-To run an infinite stress-loop simulating persistent high-volume cell traffic until manually stopped with `Ctrl+C`:
-```bash
-sudo /home/ubuntu/lte_stress_test.sh -d 100 -u 50 --stress
-```
+* **Check Current Status**:
+  Inspect active Active State Power Management (ASPM), running kernel boot command parameters, and active udev rules:
+  ```bash
+  sudo /home/ubuntu/configure_baseline.sh --status
+  ```
+* **Apply Stability Mitigations**:
+  Disable PCIe ASPM, activate software-based IOMMU mapping (`pcie_aspm=off iommu=soft`), and disable USB autosuspend to ensure the controller maintains an active connection to the modem:
+  ```bash
+  sudo /home/ubuntu/configure_baseline.sh --stabilise
+  ```
+  *(Note: A reboot of the guest VM is required to apply the updated kernel GRUB parameters.)*
+* **Restore Unoptimised Settings (Replicate Bug/Freeze)**:
+  Restore default aggressive power savings (`intel_iommu=on`, default 2000ms USB autosuspend idle sleep) to trigger the hardware reset loop:
+  ```bash
+  sudo /home/ubuntu/configure_baseline.sh --reproduce
+  ```
+  *(Note: A reboot of the guest VM is required to apply changes.)*
+
+#### B. Hardware & Interface Monitor (`monitor_modem.sh`)
+This script runs a live diagnostics loop checking the status of the Renesas XHCI controller on the PCIe bus, the Sierra modem USB state, AT serial command interface capabilities, network link state, and system logs (`dmesg`) for controller deaths or timeouts.
+
+* **Start Monitoring**:
+  ```bash
+  sudo /home/ubuntu/monitor_modem.sh
+  ```
+  The display refreshes every 2 seconds. Press `Ctrl+C` to stop.
+
+#### C. LTE Throughput Stress Tester (`lte_stress_test.sh`)
+This script executes heavy HTTP download and upload cycles bound directly to the mobile broadband/USB interface (forcing the traffic through the target modem even when a standard host Ethernet link is present).
+
+* **Command Options**:
+  - `-i, --interface <name>`: Define the target interface (e.g. `wwan0`, `enx525400123457`). Auto-detects if omitted.
+  - `-d, --download <MB>`: Size of download payload in MB (default: 100).
+  - `-u, --upload <MB>`: Size of upload payload in MB (default: 50).
+  - `-s, --stress`: Run infinitely in a loop until manually stopped.
+  - `-h, --help`: Show help instructions.
+
+* **Run a single validation cycle**:
+  ```bash
+  sudo /home/ubuntu/lte_stress_test.sh -d 10 -u 5
+  ```
+* **Execute infinite throughput stress testing**:
+  ```bash
+  sudo /home/ubuntu/lte_stress_test.sh -d 100 -u 50 --stress
+  ```
 
 ---
 
