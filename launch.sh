@@ -355,7 +355,7 @@ QEMU_CMD+=(
     -drive "file=${DISK_PATH},format=qcow2,if=none,id=bootdisk"
     -device "virtio-blk-pci,drive=bootdisk,bootindex=1"
     -serial telnet:127.0.0.1:4445,server=on,wait=off
-    -fsdev local,id=fsdev0,path="${SCRIPT_DIR}",security_model=none
+    -fsdev local,id=fsdev0,path="${SCRIPT_DIR}",security_model=mapped
     -device virtio-9p-pci,fsdev=fsdev0,mount_tag=host_share
 )
 

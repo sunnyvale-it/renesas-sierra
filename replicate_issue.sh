@@ -14,7 +14,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CRASH_FILE="${SCRIPT_DIR}/.modem_crash"
+if [ -d "/mnt/host_share" ]; then
+    CRASH_FILE="/mnt/host_share/.modem_crash"
+else
+    CRASH_FILE="${SCRIPT_DIR}/.modem_crash"
+fi
 
 # Colors
 RED='\033[0;31m'
