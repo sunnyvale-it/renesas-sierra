@@ -27,7 +27,7 @@ graph TD
         
         subgraph "Emulated USB Topology"
             VM_Serial["Virtual USB Serial Adapter<br/>(Exposes /dev/ttyUSB0)"]
-            VM_Net["Virtual USB Ethernet Adapter<br/>(Exposes usb0 / wwan0)"]
+            VM_Net["Virtual USB Ethernet Adapter<br/>(Exposes enx* / usb* / wwan*)"]
         end
     end
 
@@ -137,6 +137,30 @@ If you want to perform an interactive installation from scratch using the offici
      ```powershell
      .\launch.ps1 -IsoPath ubuntu-22.04-live-server-amd64.iso
      ```
+
+---
+
+### Connecting to the Guest VM via SSH
+
+The VM configuration maps port `2222` on your host machine to the guest's SSH service port `22`. 
+
+If you booted the pre-installed cloud image (Option A), the environment automatically sets up the following credentials:
+* **Username**: `ubuntu`
+* **Password**: `password123`
+* **Private Key**: `vm_key` (automatically generated in the repository root on macOS/Linux, and Windows when `ssh-keygen` is available).
+
+#### Option A: Connect via SSH Private Key (Recommended)
+Run the following command in your host terminal to login passwordlessly:
+```bash
+ssh -i vm_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@127.0.0.1
+```
+
+#### Option B: Connect via Password
+If you are logging in from Windows without SSH keys or prefer password authentication:
+```bash
+ssh -p 2222 ubuntu@127.0.0.1
+# When prompted, enter the password: password123
+```
 
 ---
 
