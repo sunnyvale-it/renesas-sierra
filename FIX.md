@@ -9,6 +9,7 @@ This document details the root causes and remediation steps for the driver crash
 * **Bugzilla Reference**: [Bug 199627 - issues installing Renesas Technology Corp. uPD720202 USB 3.0 Host Controller](https://bugzilla.kernel.org/show_bug.cgi?id=199627)
 * **Status**: `RESOLVED CODE_FIX`
 * **Resolving Commit**: [`0e1f0eaed6c20db41ff61e024b361ee3ec9d686c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0e1f0eaed6c20db41ff61e024b361ee3ec9d686c) (authored by Marc Zyngier)
+* **First Kernel Versions with Fix**: Mainline **Linux 4.13** (first merged in the `4.13-rc1` release candidate) and backported to stable **Linux 4.12.8**.
 
 ### The Technical Issue
 The Renesas uPD72020x series host controllers have a hardware flaw where they fail to clear or reset their internal DMA addressing logic across standard xHCI resets. 
@@ -38,7 +39,7 @@ Even on kernels containing the official reset patch, the combination of the Rene
 
 To stabilize the hardware integration, we apply a set of operational workarounds to configure the kernel parameters and udev power rules. This protocol mirrors the community-tested solutions discussed in the Bugzilla thread (such as Comments 27 and 33).
 
-The stabilization protocol is automated via the [configure_baseline.sh](file:///Users/denismaggiorotto/Documents/Progetti/Sunnyvale/OpenSource/repos/renesas-sierra/configure_baseline.sh) script inside the guest VM:
+The stabilization protocol is automated via the [configure_baseline.sh](configure_baseline.sh) 
 
 ```bash
 sudo /home/ubuntu/configure_baseline.sh --stabilise
@@ -56,7 +57,7 @@ sudo /home/ubuntu/configure_baseline.sh --stabilise
 After running the script, reboot the VM. You can verify that the mitigations have been successfully applied by running:
 
 ```bash
-sudo /home/ubuntu/configure_baseline.sh --status
+sudo configure_baseline.sh --status
 ```
 * **Expected Output**:
   * **ASPM State**: `performance` or `Not available` (verifying `pcie_aspm=off`).
