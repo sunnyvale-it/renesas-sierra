@@ -6,6 +6,19 @@ This configuration is designed to function seamlessly on both **macOS** (Intel/A
 
 ---
 
+## Target Bug & Resolution (Kernel Bugzilla: 199627)
+
+This project specifically replicates, diagnoses, and validates fixes for the well-known Linux Kernel driver crash regarding the Renesas uPD720202 host controller:
+* **Kernel Bugzilla Reference**: [Bug 199627 - issues installing Renesas Technology Corp. uPD720202 USB 3.0 Host Controller](https://bugzilla.kernel.org/show_bug.cgi?id=199627)
+
+### The Problem
+Under default Linux configurations, the Renesas controller encounters xHCI command ring timeouts (often returning error `-110`) when standard hardware IOMMU tracking is enabled under load. This causes the kernel to declare the host controller "dead" (`xhci_hcd: HC died; cleaning up`), dropping all connected USB devices (such as the LTE modem) and preventing any soft re-initialization.
+
+### The Solution
+This repository replicates this driver behavior in a virtualized QEMU sandbox (simulating the XHCI unbind sequence, injecting `dmesg` warnings, and terminating mock connection paths) and guides users in applying and verifying the standard kernel overrides (`pcie_aspm=off iommu=soft`) and USB autosuspend rules to ensure production stability.
+
+---
+
 ## 1. System Architecture (Software Emulation Mode)
 
 The following diagram illustrates how the QEMU hypervisor creates emulated virtual components:
