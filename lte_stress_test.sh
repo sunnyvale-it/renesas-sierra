@@ -167,17 +167,29 @@ run_download() {
     local url="${DOWNLOAD_URL_TEMPLATE}${DOWNLOAD_BYTES}"
     echo -e "${YELLOW}[*] Launching Download Stress: ${DOWNLOAD_SIZE_MB}MB via $INTERFACE...${NC}"
     
-    # Perform the transfer forcing it over the specific interface using curl
-    # --interface forces curl to bind its local socket to the LTE interface name or IP
     local start_time=$(date +%s%3N)
     
-    # Run curl, showing progress bar, discarding actual downloaded payload to /dev/null
+    # Try Cloudflare first with browser headers
+    local cf_success=true
     if ! curl --interface "$INTERFACE" --fail \
               -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
               -e "https://speed.cloudflare.com/" \
               -o /dev/null "$url"; then
-        echo -e "${RED}[-] Download test FAILED on interface $INTERFACE. The connection may have dropped!${NC}"
-        return 1
+        cf_success=false
+    fi
+    
+    # Fallback to ThinkBroadband if Cloudflare fails
+    if [ "$cf_success" = false ]; then
+        echo -e "${YELLOW}[!] Cloudflare download failed or blocked. Falling back to ThinkBroadband CDN...${NC}"
+        local range_end=$((DOWNLOAD_BYTES - 1))
+        local fallback_url="https://download.thinkbroadband.com/1GB.zip"
+        if ! curl --interface "$INTERFACE" --fail \
+                  -r "0-${range_end}" \
+                  -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+                  -o /dev/null "$fallback_url"; then
+            echo -e "${RED}[-] Download test FAILED on interface $INTERFACE. The connection may have dropped!${NC}"
+            return 1
+        fi
     fi
     
     local end_time=$(date +%s%3N)
@@ -202,20 +214,33 @@ run_upload() {
     
     local start_time=$(date +%s%3N)
     
-    # Upload forcing the connection through the specific interface
+    # Try Cloudflare first with browser headers
+    local cf_success=true
     if ! curl --interface "$INTERFACE" --fail -X POST \
               -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
               -e "https://speed.cloudflare.com/" \
               -H "Content-Type: application/octet-stream" \
               --data-binary "@$temp_file" "$UPLOAD_URL" -o /dev/null; then
-        echo -e "${RED}[-] Upload test FAILED on interface $INTERFACE. The connection may have dropped!${NC}"
-        rm -f "$temp_file"
-        return 1
+        cf_success=false
     fi
     
-    local end_time=$(date +%s%3N)
+    # Fallback to Tele2 upload if Cloudflare fails
+    if [ "$cf_success" = false ]; then
+        echo -e "${YELLOW}[!] Cloudflare upload failed or blocked. Falling back to Tele2 speedtest endpoint...${NC}"
+        local fallback_upload_url="http://speedtest.tele2.net/upload.php"
+        if ! curl --interface "$INTERFACE" --fail -X POST \
+                  -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+                  -F "file=@$temp_file" \
+                  "$fallback_upload_url" -o /dev/null; then
+            echo -e "${RED}[-] Upload test FAILED on interface $INTERFACE. The connection may have dropped!${NC}"
+            rm -f "$temp_file"
+            return 1
+        fi
+    fi
+    
     rm -f "$temp_file"
     
+    local end_time=$(date +%s%3N)
     local duration_ms=$((end_time - start_time))
     local duration_sec=$(echo "scale=3; $duration_ms / 1000" | bc)
     
