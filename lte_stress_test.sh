@@ -172,7 +172,10 @@ run_download() {
     local start_time=$(date +%s%3N)
     
     # Run curl, showing progress bar, discarding actual downloaded payload to /dev/null
-    if ! curl --interface "$INTERFACE" --fail -o /dev/null "$url"; then
+    if ! curl --interface "$INTERFACE" --fail \
+              -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+              -e "https://speed.cloudflare.com/" \
+              -o /dev/null "$url"; then
         echo -e "${RED}[-] Download test FAILED on interface $INTERFACE. The connection may have dropped!${NC}"
         return 1
     fi
@@ -201,6 +204,8 @@ run_upload() {
     
     # Upload forcing the connection through the specific interface
     if ! curl --interface "$INTERFACE" --fail -X POST \
+              -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+              -e "https://speed.cloudflare.com/" \
               -H "Content-Type: application/octet-stream" \
               --data-binary "@$temp_file" "$UPLOAD_URL" -o /dev/null; then
         echo -e "${RED}[-] Upload test FAILED on interface $INTERFACE. The connection may have dropped!${NC}"
