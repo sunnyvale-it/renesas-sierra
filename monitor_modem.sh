@@ -73,7 +73,11 @@ while true; do
         if echo "$USB_STATUS" | grep -q "$PID_APP"; then
             echo -e "Modem USB State:  ${GREEN}ONLINE (Application Mode)${NC} [1199:$PID_APP]"
         elif echo "$USB_STATUS" | grep -q "$PID_BOOT1"; then
-            echo -e "Modem USB State:  ${YELLOW}BOOT/RESET MODE${NC} [1199:$PID_BOOT1] (Stuck in bootloader / loading FW)"
+            if [ -c "$AT_PORT" ]; then
+                echo -e "Modem USB State:  ${GREEN}ONLINE (Application Mode)${NC} [1199:$PID_BOOT1]"
+            else
+                echo -e "Modem USB State:  ${YELLOW}BOOT/RESET MODE${NC} [1199:$PID_BOOT1] (Stuck in bootloader / loading FW)"
+            fi
         elif echo "$USB_STATUS" | grep -q "$PID_BOOT2"; then
             echo -e "Modem USB State:  ${RED}CRASHED/BOOTLOADER LOOP${NC} [1199:$PID_BOOT2]"
         else
